@@ -95,8 +95,29 @@
       }
 
       if (command === 'saveDocument') {
+        // R7 Desktop persists a locally-opened document through the editor's
+        // own save entry point (editor.asc_Save -> CDocsCoApi.saveChanges ->
+        // AscDesktopEditor.LocalFileSaveChanges). The plugin frame is
+        // same-origin with the editor frame in desktop builds, so walk up the
+        // frame chain and call it directly.
+        try {
+          var win = window
+          for (var depth = 0; depth < 3 && win; depth++) {
+            if (win.editor && typeof win.editor.asc_Save === 'function') {
+              if (win.editor.asc_SetModified) win.editor.asc_SetModified(true)
+              win.editor.asc_Save(false)
+              sendReply(id, { success: true, via: 'asc_Save' })
+              return
+            }
+            if (win === win.parent) break
+            win = win.parent
+          }
+        } catch (err) {
+          // Cross-origin frame chain: fall through to the documented method.
+        }
+
         window.Asc.plugin.executeMethod('Save', [], function() {
-          sendReply(id, { success: true })
+          sendReply(id, { success: true, via: 'executeMethod' })
         })
         return
       }

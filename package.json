@@ -16,6 +16,9 @@
   "files": [
     "src",
     "desktop-bridge",
+    "scripts/cdp.mjs",
+    "scripts/live-desktop-e2e.mjs",
+    "scripts/live-cdp-inspect.mjs",
     "cordis.patch.yml",
     "README.md",
     "README.ru.md",
@@ -32,7 +35,9 @@
     "test": "node --test \"tests/**/*.test.js\"",
     "test:unit": "node --test \"tests/unit/**/*.test.js\"",
     "test:integration": "node --test \"tests/integration/**/*.test.js\"",
-    "test:e2e": "node --test \"tests/e2e/**/*.test.js\""
+    "test:e2e": "node --test \"tests/e2e/**/*.test.js\"",
+    "test:live": "node scripts/live-desktop-e2e.mjs",
+    "inspect:r7": "node scripts/live-cdp-inspect.mjs"
   },
   "keywords": [
     "dsh-plugin",

@@ -4,16 +4,39 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { R7Adapter } from '../r7/adapter.js'
 
+/** Allowed safe commands in production mode */
+export const SAFE_COMMANDS = new Set([
+  'addParagraph',
+  'insertTable',
+  'setSelectedText',
+  'getSelectedText',
+  'getDocumentText',
+  'saveDocument',
+  'searchAndReplace'
+])
+
 /**
  * Lightweight, zero-dependency WebSocket Bridge Server for R7 Desktop Editor connection.
  */
 export class DesktopBridge {
-  constructor(port = 7888) {
-    this.port = port
+  /**
+   * @param {number|object} [options] - Port number, or an options object.
+   * @param {number} [options.port=7888] - Local bind port (127.0.0.1 only).
+   * @param {boolean} [options.developerMode=false] - Allow arbitrary DocScript execution.
+   * @param {string} [options.r7Path] - Explicit R7-Office installation path.
+   */
+  constructor(options = {}) {
+    const opts = typeof options === 'number' ? { port: options } : (options || {})
+    this.port = Number(opts.port) || 7888
+    // Arbitrary code execution is OFF unless explicitly enabled in config or env.
+    this.developerMode = opts.developerMode === true
+    if (process.env.DSH_R7_DEVELOPER_MODE === '1' || process.env.DSH_R7_DEVELOPER_MODE === 'true') {
+      this.developerMode = true
+    }
     this.server = null
     this.sockets = new Set()
     this.pendingRequests = new Map()
-    this.r7Adapter = new R7Adapter()
+    this.r7Adapter = new R7Adapter(opts.r7Path)
     this.requestId = 1
   }
 
@@ -28,7 +51,11 @@ export class DesktopBridge {
       this.server = http.createServer((req, res) => {
         if (req.url === '/health') {
           res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ status: 'ok', connectedClients: this.sockets.size }))
+          res.end(JSON.stringify({
+            status: 'ok',
+            connectedClients: this.sockets.size,
+            developerMode: this.developerMode
+          }))
           return
         }
         res.writeHead(404)
@@ -110,19 +137,20 @@ export class DesktopBridge {
 
   /**
    * Check connection status to R7 Desktop.
-   * @returns {{connected: boolean, clientCount: number, port: number}}
+   * @returns {{connected: boolean, clientCount: number, port: number, developerMode: boolean}}
    */
   getStatus() {
     return {
       connected: this.sockets.size > 0,
       clientCount: this.sockets.size,
-      port: this.port
+      port: this.port,
+      developerMode: this.developerMode
     }
   }
 
   /**
    * Execute command on active R7 Desktop window.
-   * @param {string} action - 'getSelection' | 'replaceSelection' | 'callCommand'
+   * @param {string} action - 'getSelection' | 'replaceSelection' | 'callCommand' | 'safeCommand'
    * @param {object} payload
    * @param {number} [timeoutMs=5000]
    * @returns {Promise<any>}
@@ -130,6 +158,16 @@ export class DesktopBridge {
   async execute(action, payload = {}, timeoutMs = 5000) {
     if (this.sockets.size === 0) {
       throw new Error('No active R7 Desktop window connected to bridge. Please ensure R7 Desktop is open with DSH Bridge plugin active.')
+    }
+
+    // Security check: validate arbitrary code execution in production mode
+    if (action === 'callCommand') {
+      if (!this.developerMode) {
+        throw new Error(
+          'Security Error: Arbitrary DocScript/JS execution is disabled in production mode. ' +
+          'Enable developerMode in plugin configuration or use r7_desktop_selection / safe built-in commands.'
+        )
+      }
     }
 
     const id = `req_${this.requestId++}`

@@ -77,6 +77,100 @@
       return
     }
 
+    if (action === 'safeCommand') {
+      const { command, args = {} } = payload || {}
+
+      if (command === 'getSelectedText') {
+        window.Asc.plugin.executeMethod('GetSelectedText', [], function(text) {
+          sendReply(id, { success: true, text: text })
+        })
+        return
+      }
+
+      if (command === 'setSelectedText') {
+        window.Asc.plugin.executeMethod('PasteText', [args.text || ''], function() {
+          sendReply(id, { success: true })
+        })
+        return
+      }
+
+      if (command === 'saveDocument') {
+        window.Asc.plugin.executeMethod('Save', [], function() {
+          sendReply(id, { success: true })
+        })
+        return
+      }
+
+      if (command === 'addParagraph') {
+        Asc.scope.paraText = args.text || ''
+        Asc.scope.paraStyle = args.style || 'Normal'
+        window.Asc.plugin.callCommand(function() {
+          var doc = Api.GetDocument()
+          var p = Api.CreateParagraph()
+          p.AddText(Asc.scope.paraText)
+          if (Asc.scope.paraStyle !== 'Normal') {
+            p.SetStyle(Asc.scope.paraStyle)
+          }
+          doc.Push(p)
+        }, false, true, function(result) {
+          sendReply(id, { success: true, result: result })
+        })
+        return
+      }
+
+      if (command === 'insertTable') {
+        Asc.scope.rows = args.rows || 2
+        Asc.scope.cols = args.cols || 2
+        window.Asc.plugin.callCommand(function() {
+          var doc = Api.GetDocument()
+          var table = Api.CreateTable(Asc.scope.cols, Asc.scope.rows)
+          doc.Push(table)
+        }, false, true, function(result) {
+          sendReply(id, { success: true, result: result })
+        })
+        return
+      }
+
+      if (command === 'getDocumentText') {
+        window.Asc.plugin.callCommand(function() {
+          var doc = Api.GetDocument()
+          var text = ''
+          var elementsCount = doc.GetElementsCount()
+          for (var i = 0; i < elementsCount; i++) {
+            var el = doc.GetElement(i)
+            if (el.GetText) {
+              text += el.GetText() + '\n'
+            }
+          }
+          return text
+        }, false, true, function(result) {
+          sendReply(id, { success: true, text: result })
+        })
+        return
+      }
+
+      if (command === 'searchAndReplace') {
+        Asc.scope.search = args.search || ''
+        Asc.scope.replace = args.replace || ''
+        window.Asc.plugin.callCommand(function() {
+          var doc = Api.GetDocument()
+          var elementsCount = doc.GetElementsCount()
+          for (var i = 0; i < elementsCount; i++) {
+            var el = doc.GetElement(i)
+            if (el.SearchAndReplace) {
+              el.SearchAndReplace(Asc.scope.search, Asc.scope.replace)
+            }
+          }
+        }, false, true, function(result) {
+          sendReply(id, { success: true, result: result })
+        })
+        return
+      }
+
+      sendReply(id, { success: false, error: 'Unsupported safeCommand: ' + command })
+      return
+    }
+
     if (action === 'callCommand') {
       const code = payload ? payload.code : ''
       try {

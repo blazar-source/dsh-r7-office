@@ -3,7 +3,7 @@ import { DocxEngine } from '../r7/docx.js'
 import { XlsxEngine } from '../r7/xlsx.js'
 import { PptxEngine } from '../r7/pptx.js'
 import { R7Adapter } from '../r7/adapter.js'
-import { DesktopBridge } from './desktop-bridge.js'
+import { DesktopBridge, SAFE_COMMANDS } from './desktop-bridge.js'
 
 function defaultOutput() {
   return {
@@ -30,7 +30,7 @@ export function buildR7Tools(options = {}) {
   const docxEngine = new DocxEngine(adapter)
   const xlsxEngine = new XlsxEngine(adapter)
   const pptxEngine = new PptxEngine(adapter)
-  const desktopBridge = options.desktopBridge || new DesktopBridge()
+  const desktopBridge = options.desktopBridge || new DesktopBridge(options)
 
   function getEngineByExt(filePath) {
     const ext = path.extname(filePath).toLowerCase()
@@ -356,7 +356,7 @@ export function buildR7Tools(options = {}) {
 
     {
       name: 'r7_desktop_status',
-      description: 'Check live connection status to open R7-Office Desktop windows via the local bridge.',
+      description: 'Check live connection status and security policy for open R7-Office Desktop windows via the local bridge.',
       parameters: {
         type: 'object',
         properties: {}
@@ -392,17 +392,39 @@ export function buildR7Tools(options = {}) {
 
     {
       name: 'r7_desktop_exec',
-      description: 'Execute an R7 DocumentBuilder / DocScript command directly inside the live opened document in R7 Desktop.',
+      description: 'Execute safe built-in command or custom DocScript in live opened document in R7 Desktop. Arbitrary JS requires developerMode enabled.',
       parameters: {
         type: 'object',
-        required: ['code'],
         properties: {
-          code: { type: 'string', description: 'JavaScript code using Asc.plugin / Api (e.g. Api.GetDocument().GetElement(0).AddText("Hello");).' }
+          safeCommand: {
+            type: 'string',
+            enum: ['addParagraph', 'insertTable', 'setSelectedText', 'getSelectedText', 'getDocumentText', 'saveDocument', 'searchAndReplace'],
+            description: 'Safe pre-validated command permitted in production mode.'
+          },
+          args: {
+            type: 'object',
+            description: 'Arguments for the safeCommand (e.g. { text: "...", style: "Heading1" }).'
+          },
+          code: {
+            type: 'string',
+            description: 'Arbitrary DocScript JavaScript code (ONLY permitted when developerMode: true is explicitly configured).'
+          }
         }
       },
       output: defaultOutput(),
-      async execute({ code }) {
-        return await desktopBridge.execute('callCommand', { code })
+      async execute({ safeCommand, args = {}, code }) {
+        if (safeCommand) {
+          if (!SAFE_COMMANDS.has(safeCommand)) {
+            throw new Error(`Unknown safeCommand: ${safeCommand}. Allowed: ${Array.from(SAFE_COMMANDS).join(', ')}`)
+          }
+          return await desktopBridge.execute('safeCommand', { command: safeCommand, args })
+        }
+
+        if (code) {
+          return await desktopBridge.execute('callCommand', { code })
+        }
+
+        throw new Error('Must provide either safeCommand or code parameter.')
       }
     }
   ]

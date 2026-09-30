@@ -30,6 +30,8 @@ export const R7_GUIDANCE =
   + 'r7_convert — нативная конвертация в PDF/HTML/TXT через движок x2t Р7; '
   + 'r7_validate — проверка целостности файлов; '
   + 'r7_desktop_status / r7_desktop_selection / r7_desktop_exec — управление открытым документом в Р7 Desktop. '
+  + 'r7_desktop_exec по умолчанию работает только с безопасным allowlist команд (safeCommand); произвольный DocScript/JS '
+  + 'требует явного developerMode в конфигурации плагина. '
   + 'Порядок работы с файлами: r7_inspect → r7_read → r7_edit/r7_replace/r7_insert/r7_table → r7_validate → (опционально) r7_convert в PDF.'
 
 /**
@@ -38,7 +40,12 @@ export const R7_GUIDANCE =
  * @param config - Plugin configuration options
  */
 export function apply(ctx, config = {}) {
-  const desktopBridge = new DesktopBridge(config.desktopBridgePort || 7888)
+  const desktopBridge = new DesktopBridge({
+    port: config.desktopBridgePort || 7888,
+    // Arbitrary DocScript execution is OFF unless the operator opts in.
+    developerMode: config.developerMode === true,
+    r7Path: config.r7Path
+  })
   const announce = config.announceToAgent !== false
   const prompt = ctx.get?.('systemPrompt')
 

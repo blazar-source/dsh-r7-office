@@ -5,6 +5,23 @@ import { PptxEngine } from '../r7/pptx.js'
 import { R7Adapter } from '../r7/adapter.js'
 import { DesktopBridge } from './desktop-bridge.js'
 
+function defaultOutput() {
+  return {
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        ok: { type: 'boolean' },
+        result: { type: 'string' }
+      }
+    },
+    render: (_args, val) => [{
+      type: 'text',
+      text: typeof val === 'string' ? val : JSON.stringify(val, null, 2)
+    }]
+  }
+}
+
 /**
  * Builds all R7 Office MCP tools and connects them to the underlying engines.
  */
@@ -34,6 +51,7 @@ export function buildR7Tools(options = {}) {
           filePath: { type: 'string', description: 'Path to the document file (DOCX, XLSX, PPTX).' }
         }
       },
+      output: defaultOutput(),
       async execute({ filePath }) {
         const engine = getEngineByExt(filePath)
         if (!engine) throw new Error(`Unsupported document extension: ${path.extname(filePath)}`)
@@ -59,6 +77,7 @@ export function buildR7Tools(options = {}) {
           slideIndex: { type: 'integer', description: '0-based slide index for PPTX.' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         const engine = getEngineByExt(args.filePath)
         if (!engine) throw new Error(`Unsupported document extension: ${path.extname(args.filePath)}`)
@@ -90,6 +109,7 @@ export function buildR7Tools(options = {}) {
           }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         const engine = getEngineByExt(args.filePath)
         if (!engine) throw new Error(`Unsupported document extension: ${path.extname(args.filePath)}`)
@@ -112,6 +132,7 @@ export function buildR7Tools(options = {}) {
           outputPath: { type: 'string', description: 'Optional target path (defaults to overwriting in-place).' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await docxEngine.editParagraph(args.filePath, args.paragraphIndex, args.newText || '', args)
       }
@@ -132,6 +153,7 @@ export function buildR7Tools(options = {}) {
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await docxEngine.replaceText(args.filePath, args.search, args.replace, args)
       }
@@ -155,6 +177,7 @@ export function buildR7Tools(options = {}) {
           outputPath: { type: 'string', description: 'Optional destination file path.' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await docxEngine.insert(args.filePath, args)
       }
@@ -184,6 +207,7 @@ export function buildR7Tools(options = {}) {
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await docxEngine.table(args.filePath, args)
       }
@@ -202,6 +226,7 @@ export function buildR7Tools(options = {}) {
           range: { type: 'string', description: 'Range reference (e.g. A1:C10).' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await xlsxEngine.read(args.filePath, args)
       }
@@ -225,6 +250,7 @@ export function buildR7Tools(options = {}) {
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await xlsxEngine.write(args.filePath, args)
       }
@@ -244,6 +270,7 @@ export function buildR7Tools(options = {}) {
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await xlsxEngine.write(args.filePath, {
           outputPath: args.outputPath,
@@ -265,6 +292,7 @@ export function buildR7Tools(options = {}) {
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await pptxEngine.create(args.outputPath || args.filePath, args)
       }
@@ -285,6 +313,7 @@ export function buildR7Tools(options = {}) {
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },
+      output: defaultOutput(),
       async execute(args) {
         return await pptxEngine.editSlide(args.filePath, args)
       }
@@ -301,6 +330,7 @@ export function buildR7Tools(options = {}) {
           targetPath: { type: 'string', description: 'Target destination file path (e.g. document.pdf, report.html).' }
         }
       },
+      output: defaultOutput(),
       async execute({ sourcePath, targetPath }) {
         return await adapter.convert(sourcePath, targetPath)
       }
@@ -316,6 +346,7 @@ export function buildR7Tools(options = {}) {
           filePath: { type: 'string', description: 'Path to document file.' }
         }
       },
+      output: defaultOutput(),
       async execute({ filePath }) {
         const engine = getEngineByExt(filePath)
         if (!engine) throw new Error(`Unsupported document extension: ${path.extname(filePath)}`)
@@ -330,6 +361,7 @@ export function buildR7Tools(options = {}) {
         type: 'object',
         properties: {}
       },
+      output: defaultOutput(),
       async execute() {
         return desktopBridge.getStatus()
       }
@@ -346,6 +378,7 @@ export function buildR7Tools(options = {}) {
           text: { type: 'string', description: 'Text to paste when action is replace.' }
         }
       },
+      output: defaultOutput(),
       async execute({ action, text }) {
         if (action === 'get') {
           return await desktopBridge.execute('getSelection')
@@ -367,6 +400,7 @@ export function buildR7Tools(options = {}) {
           code: { type: 'string', description: 'JavaScript code using Asc.plugin / Api (e.g. Api.GetDocument().GetElement(0).AddText("Hello");).' }
         }
       },
+      output: defaultOutput(),
       async execute({ code }) {
         return await desktopBridge.execute('callCommand', { code })
       }

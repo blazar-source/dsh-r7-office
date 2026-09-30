@@ -5,47 +5,89 @@
 (function(window, undefined) {
   let ws = null
   let reconnectTimer = null
-  const WS_URL = 'ws://127.0.0.1:7888/r7-bridge'
+
+  // The DSH bridge walks upward from its default port when that port is taken,
+  // so the plugin probes the same range instead of pinning one port. Pinning
+  // would silently break the bridge whenever another process holds 7888.
+  // Ports are probed in parallel and the first socket to open wins, which keeps
+  // discovery to a single round trip.
+  const PORT_RANGE = []
+  for (let p = 7888; p <= 7908; p++) PORT_RANGE.push(p)
+
+  function bridgeUrl(port) {
+    return 'ws://127.0.0.1:' + port + '/r7-bridge'
+  }
 
   window.Asc.plugin.init = function() {
     connectBridge()
   }
 
   function connectBridge() {
-    try {
-      ws = new WebSocket(WS_URL)
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
 
-      ws.onopen = function() {
-        if (reconnectTimer) {
-          clearTimeout(reconnectTimer)
-          reconnectTimer = null
+    const attempts = []
+    let settled = false
+
+    function abandon(except) {
+      for (const candidate of attempts) {
+        if (candidate !== except) {
+          try { candidate.close() } catch (e) { /* already closed */ }
         }
-        ws.send(JSON.stringify({
+      }
+    }
+
+    for (const port of PORT_RANGE) {
+      let socket
+      try {
+        socket = new WebSocket(bridgeUrl(port))
+      } catch (e) {
+        continue
+      }
+      attempts.push(socket)
+
+      socket.onopen = function() {
+        if (settled) {
+          try { socket.close() } catch (e) { /* ignore */ }
+          return
+        }
+        settled = true
+        ws = socket
+        abandon(socket)
+        socket.send(JSON.stringify({
           type: 'register',
           editorType: window.Asc.plugin.info ? window.Asc.plugin.info.editorType : 'unknown',
           guid: window.Asc.plugin.info ? window.Asc.plugin.info.guid : 'asc.{D5B29457-194D-4E9A-A37F-02D739818FE1}'
         }))
       }
 
-      ws.onmessage = function(event) {
+      socket.onmessage = function(event) {
+        if (socket !== ws) return
         try {
-          const msg = JSON.parse(event.data)
-          handleCommand(msg)
+          handleCommand(JSON.parse(event.data))
         } catch (e) {
           console.error('[DSH Bridge] Message handling error:', e)
         }
       }
 
-      ws.onclose = function() {
-        scheduleReconnect()
+      socket.onclose = function() {
+        if (socket === ws) {
+          ws = null
+          scheduleReconnect()
+        }
       }
 
-      ws.onerror = function() {
-        scheduleReconnect()
+      socket.onerror = function() {
+        // An unreachable port reports an error; the parallel probe continues.
       }
-    } catch (e) {
-      scheduleReconnect()
     }
+
+    // Nothing answered anywhere: retry the whole range later.
+    setTimeout(function() {
+      if (!settled && !ws) scheduleReconnect()
+    }, 2000)
   }
 
   function scheduleReconnect() {

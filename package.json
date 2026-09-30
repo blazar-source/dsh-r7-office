@@ -16,6 +16,7 @@
   "files": [
     "src",
     "desktop-bridge",
+    "docs",
     "scripts/cdp.mjs",
     "scripts/live-desktop-e2e.mjs",
     "scripts/live-cdp-inspect.mjs",

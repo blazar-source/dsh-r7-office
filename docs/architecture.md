@@ -60,18 +60,32 @@
 | `r7_edit` | DOCX Modification | Modifies, replaces, or deletes paragraphs preserving original formatting runs |
 | `r7_replace` | DOCX Text | Finds and replaces text patterns/regex while keeping font, color, bold/italic intact |
 | `r7_insert` | DOCX Insertion | Inserts paragraphs, headings, bullet lists, or page breaks at designated positions |
-| `r7_table` | DOCX Tables | Creates, updates, or inspects tables, row cells, styles, borders, shading |
-| `r7_format` | DOCX Styles | Formats paragraph spacing, alignment, fonts, sizes, colors |
+| `r7_table` | DOCX Tables | Creates, updates, or inspects tables, row cells, borders and shading |
 | `r7_sheet_read` | XLSX Data | Reads cell values, formulas, types from specific sheets and ranges (e.g. `A1:D10`) |
 | `r7_sheet_write` | XLSX Data | Writes values, styles, numbers, dates to sheets and cell ranges |
-| `r7_sheet_formula`| XLSX Math | Adds or recalculates formulas, creates new worksheets |
+| `r7_sheet_formula`| XLSX Math | Inserts or updates a formula in a cell |
 | `r7_slide_create` | PPTX Layout | Appends new slides with selected layout templates |
 | `r7_slide_edit` | PPTX Content | Edits text frames, titles, bullet points, and shape contents on slides |
 | `r7_convert` | Conversion | Converts between DOCX/XLSX/PPTX and PDF/HTML/TXT via R7 `x2t` converter |
 | `r7_validate` | Integrity | Validates document package integrity, XML schema validity, and repair checks |
-| `r7_desktop_status` | Desktop Bridge | Checks connection to active R7 Desktop window |
-| `r7_desktop_exec` | Desktop Bridge | Executes R7 DocumentBuilder JS API command in the active editor |
-| `r7_desktop_selection` | Desktop Bridge | Reads or updates selected text/cells in active R7 Desktop editor |
+| `r7_desktop_status` | Desktop Bridge | Reports the bridge connection and the effective security mode |
+| `r7_desktop_selection` | Desktop Bridge | Reads or replaces the selected text in the active R7 Desktop editor |
+| `r7_desktop_exec` | Desktop Bridge | Runs an allowlisted safe command, or arbitrary DocScript when developer mode is explicitly enabled |
+
+### 3.1 Where formatting lives
+
+There is no separate `r7_format` tool. Formatting is expressed where it is
+unambiguous and cannot silently corrupt a document:
+
+- paragraph-level formatting through `r7_edit` (`style`) and `r7_insert`
+  (heading level, style),
+- cell and table formatting through `r7_table` and `r7_sheet_write`,
+- text-level formatting is **preserved** by `r7_replace` rather than rewritten,
+  because rewriting runs is exactly how a find-and-replace loses fonts and
+  colours.
+
+A dedicated formatting tool was intentionally left out of the first release:
+without a stable style-inspection story it invites destructive writes.
 
 ## 4. Technical Details of R7 Office Integration
 

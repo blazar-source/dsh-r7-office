@@ -1,162 +1,288 @@
 # dsh-r7-office
 
-[![CI](https://github.com/deepseek-ai/dsh-r7-office/actions/workflows/ci.yml/badge.svg)](https://github.com/deepseek-ai/dsh-r7-office/actions/workflows/ci.yml)
+[![CI](https://github.com/OWNER/dsh-r7-office/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/dsh-r7-office/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
 
-**R7-Office (Р7-Офис) document processing plugin & Model Context Protocol (MCP) server for DeepSeek Harness.**
+**R7-Office (Р7-Офис) document processing plugin and Model Context Protocol (MCP) server for DeepSeek Harness.**
 
-Enables AI agents to inspect, read, generate, format, edit, and convert `DOCX`, `XLSX`, `PPTX`, and `PDF` documents directly through official R7-Office engines and pure Open Packaging Conventions (OPC) standards without keyboard/mouse emulation.
+Lets an AI agent inspect, read, create, format, edit and convert `DOCX`, `XLSX`,
+`PPTX` and `PDF` documents — through standard OOXML manipulation plus the R7
+converter you already have installed — without emulating a mouse or keyboard.
+
+> ## ⚠️ Unofficial community project
+>
+> This is an **independent, community-maintained** project. It is **not
+> affiliated with, endorsed by, sponsored by, or supported by АО «Р7»
+> (R7-Office) or DeepSeek**, and it is not an official R7-Office or DeepSeek
+> product.
+>
+> *R7-Office* and *Р7-Офис* are trademarks of their respective owners and are
+> used here only to describe what this software interoperates with.
+>
+> This repository **contains no R7-Office code, binaries or other assets**. It
+> detects an R7-Office installation already present on the user's machine and
+> drives it locally. You must install and license R7-Office yourself.
+>
+> ---
+
+**Русская документация:** [README.ru.md](README.ru.md)
 
 ---
 
-## 🇷🇺 Документация на русском
-Полная документация на русском языке доступна в файле [README.ru.md](README.ru.md).
+## What it does
 
----
-
-## Key Features
-
-- **Format-Preserving Editing**: Text replacements and edits preserve original XML styles, fonts, colors, and paragraph numbering hierarchies.
-- **Full Office Formats Coverage**:
-  - **DOCX**: Headings, paragraphs, bullet lists, tables, cell borders/shading, page breaks, metadata.
-  - **XLSX**: Worksheets, cell ranges (`A1:D10`), numbers, strings, formulas (`SUM`, arithmetic, etc.).
-  - **PPTX**: Slides, titles, text frames, shape content.
-  - **PDF**: 100% fidelity document conversion powered by local R7 `x2t` engine.
-- **Safety & Validation**: Built-in `r7_validate` checks package integrity and schema compliance before and after modifications.
-- **Dual Runtime Support**:
-  - **DeepSeek Harness Plugin**: Mounts `r7_*` tools into `ctx.tools` and provides agent guidance.
-  - **Standalone MCP Server**: Exposes standard JSON-RPC 2.0 tools for Claude Code, Cursor, Windsurf, or any MCP client.
-- **R7 Desktop Live Bridge**: Connects directly to open R7 Desktop editor windows via local WebSocket to read selections or execute DocScript commands in real-time.
-
----
+- **Format-preserving editing** — replacements and edits keep the original XML
+  styles, fonts, colours and numbering hierarchies. Untouched parts of a
+  document are preserved byte for byte.
+- **All four formats** — DOCX (headings, paragraphs, lists, tables, page
+  breaks), XLSX (sheets, ranges, values, formulas), PPTX (slides, titles, text
+  frames), PDF (conversion through the local R7 `x2t` engine).
+- **Validation built in** — `r7_validate` checks package integrity before and
+  after a change.
+- **Two ways to run** — as a native DeepSeek Harness plugin, or as a standalone
+  MCP server over stdio for any MCP client.
+- **Live desktop bridge** — optionally drives a document the user has **open**
+  in R7-Office Desktop, over a loopback WebSocket.
 
 ## Architecture
 
 ```text
-DeepSeek Harness → dsh-r7-office Plugin → MCP Server → R7 Engines & x2t → DOCX/XLSX/PPTX/PDF
-                                                   └─→ Desktop Bridge ──→ Open R7 Desktop Window
+DeepSeek Harness ──► dsh-r7-office plugin ──┐
+                                            ├──► DOCX / XLSX / PPTX / PDF
+Any MCP client ────► MCP server (stdio) ────┤
+                                            │
+R7-Office Desktop ◄── desktop bridge ◄──────┘
 ```
 
-See [docs/architecture.md](docs/architecture.md) for full architectural documentation and [docs/decisions/](docs/decisions/) for Architecture Decision Records (ADRs).
+Details in [docs/architecture.md](docs/architecture.md); design decisions in
+[docs/decisions/](docs/decisions/).
 
 ---
 
-## Installation
+## Requirements
 
-### 1. As a DeepSeek Harness Plugin
+| | |
+|---|---|
+| Node.js | **>= 20.0.0** to run the plugin and MCP server. **>= 22.0.0** to run the full test suite (the bridge and CDP clients use the global `WebSocket`, which only exists from Node 22). |
+| Runtime dependencies | **none** — the plugin has zero runtime dependencies |
+| R7-Office Desktop | **optional.** Needed for `r7_convert` (→ PDF/HTML), `inspect` fidelity on exotic documents, and the whole desktop bridge. Without it the pure-OOXML tools still work. |
+| Platform | Windows, Linux and macOS. R7 auto-detection covers the standard install locations of all three; the live desktop bridge is verified on Windows only (see [limitations](#known-limitations)). |
 
-Add `dsh-r7-office` to your `cordis.patch.yml`:
+---
 
-```yaml
-- insert:
-    - id: r7-office
-      name: 'dsh-r7-office'
-```
+## Clean install from scratch
 
-Or install via DeepSeek Harness Plugin Manager:
+These steps assume an empty directory and a machine with Node.js 20+.
 
 ```bash
-dsh plugin install dsh-r7-office
+# 1. Get the code
+git clone https://github.com/OWNER/dsh-r7-office.git
+cd dsh-r7-office
+
+# 2. Install the optional dev dependencies (test-only: the MCP client SDK)
+npm install
+
+# 3. Verify the checkout — no R7-Office required for this step
+npm test
 ```
 
-### 2. Standalone MCP Server (Claude Code, Cursor, etc.)
+`npm test` runs 135 tests: pure unit tests, OOXML round-trip regression tests,
+file end-to-end workflows, security-policy tests and an external MCP client
+smoke suite. Tests that need an R7-Office installation **skip themselves** with
+a clear message instead of failing, so a clean machine gets a green run.
 
-Add to your MCP client configuration (e.g. `claude_desktop_config.json` or `.cursor/mcp.json`):
+Then verify the integration you actually intend to use:
+
+```bash
+# R7-Office file pipeline (author → edit → validate → PDF). Skips if R7 is absent.
+npm run test:live
+
+# DeepSeek Harness plugin activation. Boots a fresh Harness and asserts the
+# 17 r7_* tools reached the tool registry.
+npm run test:harness -- --profile web
+```
+
+### As a DeepSeek Harness plugin
+
+Install the package directory as a bundle:
+
+```bash
+# in the DeepSeek Harness UI: plugin_manager → install_bundle
+# target: /absolute/path/to/dsh-r7-office
+```
+
+or from the CLI equivalent for your profile:
+
+```bash
+dsh plugin --profile <profile> add /absolute/path/to/dsh-r7-office
+```
+
+Confirm it activated — a fresh Harness boot prints:
+
+```text
+[r7-office] зарегистрировано инструментов: 17 (r7_inspect, r7_read, ...); desktop bridge port=7888, developerMode=false
+```
+
+> **Note.** Add the row **either** through `install_bundle` **or** by hand in
+> the profile's `cordis.patch.yml` — never both. Two entries with the same
+> `r7-office` id make the row fail to activate.
+
+The plugin also registers a short usage section into the agent system prompt,
+so the agent knows the tools and the intended `inspect → read → edit →
+validate → convert` order.
+
+### As a standalone MCP server
+
+The MCP server speaks line-delimited JSON-RPC 2.0 on stdio.
 
 ```json
 {
   "mcpServers": {
     "r7-office": {
       "command": "node",
-      "args": ["/path/to/dsh-r7-office/src/mcp/cli.js"]
+      "args": ["/absolute/path/to/dsh-r7-office/src/mcp/cli.js"]
     }
   }
 }
 ```
 
+Put that in your client's configuration file (for example
+`claude_desktop_config.json` or `.cursor/mcp.json`). Any stdio MCP client
+works; interoperability is verified in `npm test` against the official
+`@modelcontextprotocol/client` SDK.
+
+You can also run it by hand:
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node src/mcp/cli.js
+```
+
 ---
 
-## MCP Tools Reference
+## Tools
 
-| Tool | Description |
+| Tool | Purpose |
 |---|---|
-| `r7_inspect` | Inspects document hierarchy, outline, headings, tables, sheets, and slides |
-| `r7_read` | Reads structured paragraphs, markdown representation, or cell ranges |
-| `r7_create` | Creates fresh DOCX/XLSX/PPTX documents from native R7 templates |
-| `r7_edit` | Edits, updates text/style, or removes specific paragraphs in DOCX |
-| `r7_replace` | Searches and replaces text in DOCX while strictly preserving all formatting |
-| `r7_insert` | Inserts paragraphs, headings, lists, or page breaks at specified positions |
-| `r7_table` | Creates, modifies, or inspects tables and cell contents |
-| `r7_sheet_read` | Reads cell values and formulas from XLSX worksheets |
-| `r7_sheet_write` | Writes individual cells or 2D data matrices to XLSX worksheets |
-| `r7_sheet_formula` | Inserts and updates spreadsheet formulas in XLSX |
-| `r7_slide_create` | Creates new slides in PPTX presentations |
-| `r7_slide_edit` | Modifies titles and text frames on PPTX slides |
-| `r7_convert` | Converts documents to PDF, HTML, TXT, DOCX, XLSX via R7 `x2t` engine |
-| `r7_validate` | Validates document package integrity and XML health |
-| `r7_desktop_status` | Checks connection status with active R7 Desktop window |
-| `r7_desktop_selection`| Reads or replaces selected text in active R7 Desktop editor |
-| `r7_desktop_exec` | Executes R7 DocScript / DocumentBuilder JS commands in live editor |
+| `r7_inspect` | Document outline: headings, paragraphs, tables, sheets, slides, metadata |
+| `r7_read` | Structured text, Markdown view, or spreadsheet cell ranges |
+| `r7_create` | New DOCX / XLSX / PPTX |
+| `r7_edit` | Replace, restyle or delete one paragraph by index |
+| `r7_replace` | Find and replace text, preserving run formatting |
+| `r7_insert` | Insert paragraphs, headings, bullet items or page breaks |
+| `r7_table` | Create, inspect or update tables and cells |
+| `r7_sheet_read` | Read values and formulas from a sheet or range (e.g. `A1:D10`) |
+| `r7_sheet_write` | Write cells or a 2-D matrix |
+| `r7_sheet_formula` | Insert or update a formula |
+| `r7_slide_create` | Create a slide |
+| `r7_slide_edit` | Edit slide titles and text frames |
+| `r7_convert` | Convert via the R7 `x2t` engine (PDF, HTML, TXT, DOCX, XLSX, PPTX) |
+| `r7_validate` | Check package integrity and XML health |
+| `r7_desktop_status` | Desktop bridge connection and effective security mode |
+| `r7_desktop_selection` | Read or replace the selection in the open editor |
+| `r7_desktop_exec` | Run a safe editor command, or raw DocScript in developer mode |
 
 ---
 
-## Example Usage
+## Typical agent flow
 
-### Typical Agent User Prompt
-> "Take `Report.docx`, update section 3 with the new 2026 strategic plan, preserve original styling, add a summary table, validate the document, and export to PDF."
+> "Take `Report.docx`, update section 3, keep the formatting, add a summary
+> table and save a PDF."
 
-### Programmatic Scenario Flow
+```text
+r7_inspect → r7_read → r7_replace (keeps formatting) → r7_table
+           → r7_validate → r7_convert
+```
+
+Run it yourself:
+
+```bash
+node examples/report-scenario.js
+```
+
+Library use:
+
 ```javascript
 import { DocxEngine, R7Adapter } from 'dsh-r7-office/r7'
 
 const docx = new DocxEngine()
 const adapter = new R7Adapter()
 
-// 1. Inspect
-const outline = await docx.inspect('Report.docx')
-
-// 2. Replace text preserving formatting
-await docx.replaceText(
-  'Report.docx',
-  'Draft section 3 text',
-  'Approved strategic plan for 2026-2028.',
-  { outputPath: 'Report_v2.docx' }
-)
-
-// 3. Add table
-await docx.table('Report_v2.docx', {
-  action: 'create',
-  rows: [
-    ['Objective', 'Timeline', 'Owner'],
-    ['Deploy R7', 'Q2', 'IT Team']
-  ]
+await docx.replaceText('Report.docx', 'draft text', 'approved text', {
+  outputPath: 'Report_v2.docx'   // the original is never overwritten by default
 })
 
-// 4. Validate
-const check = await docx.validate('Report_v2.docx')
-console.log('Valid:', check.valid)
+await docx.table('Report_v2.docx', {
+  action: 'create',
+  rows: [['Objective', 'Timeline', 'Owner'], ['Deploy R7', 'Q2', 'IT']]
+})
 
-// 5. Convert to PDF
+console.log((await docx.validate('Report_v2.docx')).valid)
+
 await adapter.convert('Report_v2.docx', 'Report_v2.pdf')
 ```
 
 ---
 
-## Running Tests
+## Security
+
+`r7_desktop_exec` can execute code inside the user's open editor. Raw
+DocScript is therefore **disabled by default**; only a fixed allowlist of safe
+argument-driven commands runs in production. Enable raw execution only
+deliberately:
+
+```yaml
+- id: r7-office
+  name: 'dsh-r7-office'
+  config:
+    developerMode: true        # or export DSH_R7_DEVELOPER_MODE=1
+```
+
+`r7_desktop_status` always reports the effective mode. The desktop bridge binds
+to `127.0.0.1` only.
+
+See [SECURITY.md](SECURITY.md) for the full threat model and how to report a
+vulnerability.
+
+---
+
+## Known limitations
+
+- **Live desktop bridge: Windows verified.** The bridge plugin itself is
+  platform-neutral, but the automated live test drives R7-Office Desktop
+  through the CEF DevTools protocol and is only verified against the Windows
+  build (`Editors-2026.3.1`). Other platforms should work; they are untested.
+- **R7 required for PDF.** `r7_convert` needs a local R7 installation for its
+  `x2t` converter. Everything else works without it.
+- **Format coverage.** Reading and editing cover the common OOXML surface
+  listed above. Charts, embedded objects, SmartArt and tracked changes are
+  preserved but not editable through these tools.
+- **No concurrent editing.** File tools operate on a document at rest. For a
+  document the user has open, use the desktop bridge; the file tools assume
+  the file is not locked by another process.
+
+---
+
+## Development
 
 ```bash
-# Run all unit, integration, and e2e test suites
-npm test
-
-# Run specific suite
+npm test              # everything
 npm run test:unit
 npm run test:integration
 npm run test:e2e
+npm run test:live     # needs R7-Office installed
+npm run test:harness  # boots a fresh DeepSeek Harness
+npm run inspect:r7    # CDP probe of a running R7 Desktop
 ```
+
+See [docs/development.md](docs/development.md) and
+[docs/roadmap.md](docs/roadmap.md).
 
 ---
 
 ## License
 
-MIT © DSH R7-Office Contributors
+MIT — see [LICENSE](LICENSE).
+
+R7-Office is proprietary software owned by АО «Р7». This project redistributes
+none of it.

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Desktop Bridge end-to-end test.
  *
  * Boots the real bridge server and drives it through a real WebSocket client,
@@ -11,6 +11,14 @@ import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { DesktopBridge } from '../../src/mcp/desktop-bridge.js'
 import { buildR7Tools } from '../../src/mcp/tools.js'
+
+// The bridge server itself is dependency-free and runs on Node 20, but this
+// suite drives it through a real client, and the global WebSocket class only
+// exists from Node 22. Skip rather than fail on an older runtime.
+const hasWebSocketClient = typeof globalThis.WebSocket === 'function'
+const skipReason = hasWebSocketClient
+  ? false
+  : 'global WebSocket is unavailable (needs Node.js >= 22 to drive the bridge as a client)'
 
 const PORT_BASE = 17888
 
@@ -34,7 +42,7 @@ function nextMessage(ws) {
   })
 }
 
-describe('Desktop Bridge E2E', () => {
+describe('Desktop Bridge E2E', { skip: skipReason }, () => {
   describe('production mode (developerMode off)', () => {
     let bridge
     let port
@@ -67,17 +75,17 @@ describe('Desktop Bridge E2E', () => {
       assert.equal(command.action, 'getSelection')
       assert.ok(command.id, 'the command carries a correlation id')
 
-      ws.send(JSON.stringify({ id: command.id, success: true, text: 'выделенный фрагмент' }))
+      ws.send(JSON.stringify({ id: command.id, success: true, text: 'РІС‹РґРµР»РµРЅРЅС‹Р№ С„СЂР°РіРјРµРЅС‚' }))
       const result = await pending
       assert.equal(result.success, true)
-      assert.equal(result.text, 'выделенный фрагмент')
+      assert.equal(result.text, 'РІС‹РґРµР»РµРЅРЅС‹Р№ С„СЂР°РіРјРµРЅС‚')
     })
 
     test('performs a selection replacement over the wire', async () => {
-      const pending = bridge.execute('replaceSelection', { text: 'новый текст' })
+      const pending = bridge.execute('replaceSelection', { text: 'РЅРѕРІС‹Р№ С‚РµРєСЃС‚' })
       const command = await nextMessage(ws)
       assert.equal(command.action, 'replaceSelection')
-      assert.equal(command.payload.text, 'новый текст')
+      assert.equal(command.payload.text, 'РЅРѕРІС‹Р№ С‚РµРєСЃС‚')
 
       ws.send(JSON.stringify({ id: command.id, success: true }))
       const result = await pending
@@ -92,7 +100,7 @@ describe('Desktop Bridge E2E', () => {
     })
 
     test('allows a safe command through the wire', async () => {
-      const pending = bridge.execute('safeCommand', { command: 'addParagraph', args: { text: 'Абзац' } })
+      const pending = bridge.execute('safeCommand', { command: 'addParagraph', args: { text: 'РђР±Р·Р°С†' } })
       const command = await nextMessage(ws)
       assert.equal(command.action, 'safeCommand')
       assert.equal(command.payload.command, 'addParagraph')
@@ -227,3 +235,4 @@ describe('Desktop Bridge E2E', () => {
     })
   })
 })
+

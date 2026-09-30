@@ -59,9 +59,10 @@ export class R7Adapter {
         }
       }
 
-      // Check common default location
-      candidates.push('C:\\Program Files\\R7-Office\\Editors-2026.3.1')
-      candidates.push('C:\\Program Files\\R7-Office\\Editors')
+      // Version-agnostic fallbacks for a default installation layout. The
+      // directory scan above already covers every "Editors-<version>" folder,
+      // so nothing here may pin a specific R7 release.
+      candidates.push(path.join(process.env.ProgramFiles || 'C:\\Program Files', 'R7-Office', 'Editors'))
 
       for (const cand of candidates) {
         const testX2t = path.join(cand, 'converter', 'x2t.exe')

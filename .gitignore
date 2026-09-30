@@ -1,14 +1,52 @@
+# Dependencies
 node_modules/
+.pnpm-store/
+
+# Build and coverage output
 dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Local environment and editor state
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.swp
 .DS_Store
 Thumbs.db
+
+# Logs and scratch files
 *.log
+npm-debug.log*
 *.tmp
 temp/
-coverage/
-.env
-.env.local
 test_output/
+.scratch/
+
+# Generated office documents.
+#
+# The test suite authors every document it needs at run time, so no binary
+# fixtures belong in the repository. These rules keep stray output out.
+*.docx
+*.docxf
+*.xlsx
+*.pptx
 *.pdf
-!tests/fixtures/*.pdf
+*.odt
+*.ods
+*.odp
+!tests/fixtures/**
 !examples/**/*.pdf
+
+# R7-Office is proprietary software and is never redistributed here.
+# This project detects the user's own installation and drives it in place.
+x2t
+x2t.exe
+*.dll
+*.so
+*.dylib
+DesktopEditors.exe
+editors.exe

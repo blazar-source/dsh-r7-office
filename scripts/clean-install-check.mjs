@@ -3,8 +3,8 @@
  *
  * Reproduces exactly what a new user gets: clone the committed repository into
  * an empty directory, install, and run the suite there. Nothing from the
- * working tree is reused, so a file that is needed but never committed вЂ” or a
- * test that only passes against local leftovers вЂ” fails this check.
+ * working tree is reused, so a file that is needed but never committed — or a
+ * test that only passes against local leftovers — fails this check.
  *
  * Usage:
  *   node scripts/clean-install-check.mjs [--keep] [--skip-tests]
@@ -26,7 +26,7 @@ const skipTests = process.argv.includes('--skip-tests')
 const steps = []
 function record(name, ok, detail = '') {
   steps.push({ name, ok, detail })
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  вЂ” ' + detail : ''}`)
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`)
 }
 
 /** Run a command, streaming output, and resolve with the exit code. */
@@ -51,7 +51,7 @@ function run(command, args, cwd, { capture = false } = {}) {
 const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-r7-clean-'))
 const cloneDir = path.join(workDir, 'dsh-r7-office')
 
-console.log(`clean-install check вЂ” work dir: ${workDir}\n`)
+console.log(`clean-install check — work dir: ${workDir}\n`)
 
 try {
   // 1. Confirm the working tree has no uncommitted changes: otherwise this test
@@ -127,7 +127,7 @@ try {
 const failed = steps.filter((s) => !s.ok)
 console.log(`\n${steps.length - failed.length}/${steps.length} checks passed`)
 if (failed.length > 0) {
-  for (const f of failed) console.log(`  FAILED: ${f.name} вЂ” ${f.detail}`)
+  for (const f of failed) console.log(`  FAILED: ${f.name} — ${f.detail}`)
   console.log('\nRESULT: FAILED')
   process.exit(1)
 }

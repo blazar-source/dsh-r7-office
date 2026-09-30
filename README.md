@@ -87,7 +87,7 @@ npm install
 npm test
 ```
 
-`npm test` runs 135 tests: pure unit tests, OOXML round-trip regression tests,
+`npm test` runs 155 tests: pure unit tests, OOXML round-trip regression tests,
 file end-to-end workflows, security-policy tests and an external MCP client
 smoke suite. Tests that need an R7-Office installation **skip themselves** with
 a clear message instead of failing, so a clean machine gets a green run.

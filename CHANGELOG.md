@@ -41,13 +41,13 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 **Testing and tooling**
 - 155 tests across 28 suites: unit, OOXML regression, file end-to-end, desktop
   bridge and external MCP client.
-- `scripts/live-desktop-e2e.mjs` вЂ” 19-check live run against a real R7-Office
+- `scripts/live-desktop-e2e.mjs` — 19-check live run against a real R7-Office
   Desktop driven through the CEF DevTools protocol.
-- `scripts/harness-smoke.mjs` вЂ” boots a fresh DeepSeek Harness and asserts the
+- `scripts/harness-smoke.mjs` — boots a fresh DeepSeek Harness and asserts the
   plugin reached the tool registry.
-- `scripts/clean-install-check.mjs` вЂ” clones the repository into an empty
+- `scripts/clean-install-check.mjs` — clones the repository into an empty
   directory, installs, runs the suite and inspects `npm pack` output.
-- `scripts/cdp.mjs` вЂ” dependency-free Chrome DevTools Protocol client.
+- `scripts/cdp.mjs` — dependency-free Chrome DevTools Protocol client.
 
 **Documentation**
 - English and Russian READMEs with clean-install instructions.
@@ -85,7 +85,7 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
   the bridge actually bound, instead of pinning `7888`. Previously a busy
   default port silently broke the bridge.
 - R7 Desktop saves a locally-opened document through
-  `editor.asc_Save` в†’ `CDocsSaveApi.saveChanges` в†’ `LocalFileSaveChanges`; the
+  `editor.asc_Save` → `CDocsSaveApi.saveChanges` → `LocalFileSaveChanges`; the
   bridge now uses that path, because the plugin's `executeMethod('Save')`
   reported success without writing to disk.
 - Live desktop teardown terminates `editors.exe`, not only the

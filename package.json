@@ -19,6 +19,7 @@
     "scripts/cdp.mjs",
     "scripts/live-desktop-e2e.mjs",
     "scripts/live-cdp-inspect.mjs",
+    "scripts/harness-smoke.mjs",
     "cordis.patch.yml",
     "README.md",
     "README.ru.md",
@@ -37,6 +38,7 @@
     "test:integration": "node --test \"tests/integration/**/*.test.js\"",
     "test:e2e": "node --test \"tests/e2e/**/*.test.js\"",
     "test:live": "node scripts/live-desktop-e2e.mjs",
+    "test:harness": "node scripts/harness-smoke.mjs",
     "inspect:r7": "node scripts/live-cdp-inspect.mjs"
   },
   "keywords": [
@@ -59,6 +61,8 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.1.0"
+  }
 }

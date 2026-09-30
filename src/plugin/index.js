@@ -74,6 +74,16 @@ export function apply(ctx, config = {}) {
       })
     }
 
+    // One concise activation line: it is the only positive evidence a boot log
+    // can carry that the tools really reached the Harness tool registry.
+    if (config.quiet !== true) {
+      const names = tools.map((tool) => tool.name).join(', ')
+      console.log(
+        `[r7-office] зарегистрировано инструментов: ${tools.length} (${names}); `
+        + `desktop bridge port=${desktopBridge.port}, developerMode=${desktopBridge.developerMode}`
+      )
+    }
+
     return () => {
       desktopBridge.stop().catch(() => {})
       for (const dispose of disposers) {

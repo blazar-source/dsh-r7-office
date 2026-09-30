@@ -100,36 +100,81 @@ export class XlsxEngine {
   }
 
   /**
+   * Resolve a worksheet part path from the workbook's own part graph.
+   *
+   * The sheet order in `workbook.xml` is authoritative, and the r:id of each
+   * `<sheet>` is resolved through `xl/_rels/workbook.xml.rels` — a worksheet's
+   * file number need not match its position, which is exactly the case in
+   * workbooks produced by other tools.
+   *
+   * @param {ZipArchive} zip
+   * @param {{sheetIndex?: number, sheetName?: string}} target
+   * @returns {string}
+   */
+  _resolveSheetPath(zip, target = {}) {
+    const workbookXml = zip.getText('xl/workbook.xml')
+    if (!workbookXml) {
+      throw new Error('Invalid XLSX: xl/workbook.xml not found')
+    }
+
+    const sheets = extractElements(workbookXml, 'sheet')
+    if (sheets.length === 0) {
+      throw new Error('Invalid XLSX: the workbook declares no sheets')
+    }
+
+    let index = Number.isInteger(target.sheetIndex) ? target.sheetIndex : 0
+    if (target.sheetName) {
+      const wanted = target.sheetName.toLowerCase()
+      const found = sheets.findIndex((s) => {
+        const name = getAttribute(s.outerXml, 'name')
+        return name && name.toLowerCase() === wanted
+      })
+      if (found === -1) {
+        const names = sheets.map((s) => getAttribute(s.outerXml, 'name')).join(', ')
+        throw new Error(`Sheet not found: "${target.sheetName}". Available sheets: ${names}`)
+      }
+      index = found
+    }
+
+    if (index < 0 || index >= sheets.length) {
+      throw new Error(`Sheet index out of range: ${index} (the workbook has ${sheets.length} sheet(s))`)
+    }
+
+    const rId = getAttribute(sheets[index].outerXml, 'r:id')
+    const relsXml = zip.getText('xl/_rels/workbook.xml.rels')
+    if (rId && relsXml) {
+      const rel = extractElements(relsXml, 'Relationship')
+        .find((r) => getAttribute(r.outerXml, 'Id') === rId)
+      const relTarget = rel ? getAttribute(rel.outerXml, 'Target') : null
+      if (relTarget) {
+        const normalized = relTarget.replace(/^\/xl\//, '').replace(/^\.\//, '')
+        const candidate = normalized.startsWith('xl/') ? normalized : `xl/${normalized}`
+        if (zip.has(candidate)) return candidate
+      }
+    }
+
+    // Fall back to the positional convention when the rels part is missing.
+    const fallback = `xl/worksheets/sheet${index + 1}.xml`
+    if (!zip.has(fallback)) {
+      throw new Error(`Worksheet part not found for sheet index ${index}`)
+    }
+    return fallback
+  }
+
+  /**
    * Read cells from specific sheet and optional range (e.g. A1:D10).
    * @param {string} filePath
    * @param {object} [options]
    * @returns {Promise<object>}
    */
   async read(filePath, options = {}) {
-    const { sheetIndex = 0, sheetName = null, range = null } = options
+    const { sheetIndex, sheetName = null, range = null, includeFormulas = false } = options
     const zip = await ZipArchive.fromFile(filePath)
 
     // Load shared strings
     const sharedStrings = this._loadSharedStrings(zip)
 
-    // Determine target sheet path
-    let targetSheetPath = `xl/worksheets/sheet${sheetIndex + 1}.xml`
-    const workbookXml = zip.getText('xl/workbook.xml')
-
-    if (sheetName && workbookXml) {
-      const sheetElements = extractElements(workbookXml, 'sheet')
-      for (let i = 0; i < sheetElements.length; i++) {
-        const sName = getAttribute(sheetElements[i].outerXml, 'name')
-        if (sName && sName.toLowerCase() === sheetName.toLowerCase()) {
-          targetSheetPath = `xl/worksheets/sheet${i + 1}.xml`
-          break
-        }
-      }
-    }
-
-    if (!zip.has(targetSheetPath)) {
-      throw new Error(`Sheet not found: ${targetSheetPath}`)
-    }
+    const targetSheetPath = this._resolveSheetPath(zip, { sheetIndex, sheetName })
 
     const sheetXml = zip.getText(targetSheetPath)
     const rows = extractElements(sheetXml, 'row')
@@ -212,22 +257,44 @@ export class XlsxEngine {
     }
 
     const dataMatrix = []
+    const formulaMatrix = []
+    let formulaCount = 0
+
     for (let r = startRow; r <= endRow; r++) {
       const rowArr = []
+      const formulaArr = []
       for (let c = startCol; c <= endCol; c++) {
         const cellObj = grid[r]?.[c]
         rowArr.push(cellObj ? cellObj.value : '')
+        formulaArr.push(cellObj?.formula ?? null)
+        if (cellObj?.formula) formulaCount++
       }
       dataMatrix.push(rowArr)
+      formulaMatrix.push(formulaArr)
     }
 
-    return {
+    const result = {
       sheet: targetSheetPath,
       range: range || `${indexToColLetter(startCol)}${startRow + 1}:${indexToColLetter(endCol)}${endRow + 1}`,
       rowCount: dataMatrix.length,
       colCount: dataMatrix[0]?.length || 0,
       data: dataMatrix
     }
+
+    // A formula cell only carries a cached <v> when a spreadsheet engine has
+    // already calculated it. Exposing the formulas (and saying whether the
+    // values are computed) is what lets a caller verify a formula was written
+    // rather than misreading an empty string as a lost value.
+    if (includeFormulas) {
+      result.formulas = formulaMatrix
+      result.formulaCount = formulaCount
+      if (formulaCount > 0) {
+        result.note = 'Formula cells are stored as written. Cached values are present only once a '
+          + 'spreadsheet engine (for example R7-Office) has opened and recalculated the workbook.'
+      }
+    }
+
+    return result
   }
 
   /**
@@ -239,18 +306,15 @@ export class XlsxEngine {
   async write(filePath, options = {}) {
     const {
       outputPath = filePath,
-      sheetIndex = 0,
+      sheetIndex,
+      sheetName = null,
       cells = [],
       matrix = null,
       startCell = 'A1'
     } = options
 
     const zip = await ZipArchive.fromFile(filePath)
-    const targetSheetPath = `xl/worksheets/sheet${sheetIndex + 1}.xml`
-
-    if (!zip.has(targetSheetPath)) {
-      throw new Error(`Sheet not found: ${targetSheetPath}`)
-    }
+    const targetSheetPath = this._resolveSheetPath(zip, { sheetIndex, sheetName })
 
     let sheetXml = zip.getText(targetSheetPath)
 
@@ -326,13 +390,147 @@ export class XlsxEngine {
   }
 
   /**
+   * Add a worksheet to an existing workbook.
+   *
+   * Registers every required package part: the worksheet itself, its content
+   * type override, the workbook `<sheet>` entry and the workbook relationship.
+   * Existing worksheets are never rewritten.
+   *
+   * @param {string} filePath
+   * @param {object} [options]
+   * @param {string} [options.name] - Worksheet name (defaults to "ЛистN").
+   * @param {number} [options.index] - Insert position; appended when omitted.
+   * @param {Array<Array<*>>} [options.data] - Optional 2-D data to write.
+   * @param {string} [options.outputPath]
+   * @returns {Promise<{success: boolean, name: string, sheetIndex: number, outputPath: string}>}
+   */
+  async addSheet(filePath, options = {}) {
+    const {
+      name = null,
+      index = null,
+      data = null,
+      outputPath = filePath
+    } = options
+
+    const zip = await ZipArchive.fromFile(filePath)
+    const workbookXml = zip.getText('xl/workbook.xml')
+    if (!workbookXml) throw new Error('Invalid XLSX: xl/workbook.xml not found')
+
+    const existingSheets = extractElements(workbookXml, 'sheet')
+    const usedNames = existingSheets
+      .map((s) => getAttribute(s.outerXml, 'name'))
+      .filter(Boolean)
+    const usedSheetIds = existingSheets
+      .map((s) => Number(getAttribute(s.outerXml, 'sheetId')))
+      .filter((n) => Number.isFinite(n))
+
+    const sheetName = this._uniqueSheetName(name || `Лист${usedNames.length + 1}`, usedNames)
+
+    // A worksheet part number must be free; the position in the tab order is a
+    // separate thing, carried by the order of <sheet> in workbook.xml.
+    const partNumbers = zip.list()
+      .map((entry) => {
+        const m = entry.match(/^xl\/worksheets\/sheet(\d+)\.xml$/)
+        return m ? Number(m[1]) : 0
+      })
+      .filter(Boolean)
+    const partNumber = partNumbers.length > 0 ? Math.max(...partNumbers) + 1 : 1
+    const sheetPath = `xl/worksheets/sheet${partNumber}.xml`
+    const sheetId = usedSheetIds.length > 0 ? Math.max(...usedSheetIds) + 1 : 1
+
+    // Relationship id for the workbook -> worksheet edge.
+    const relsPath = 'xl/_rels/workbook.xml.rels'
+    let relsXml = zip.getText(relsPath)
+    if (!relsXml) {
+      relsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+    }
+    const relIds = [...relsXml.matchAll(/Id="rId(\d+)"/g)].map((m) => Number(m[1]))
+    const relId = `rId${relIds.length > 0 ? Math.max(...relIds) + 1 : 1}`
+    relsXml = relsXml.replace(
+      '</Relationships>',
+      `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${partNumber}.xml"/></Relationships>`
+    )
+
+    // Content type override for the new part.
+    const contentTypesPath = '[Content_Types].xml'
+    let contentTypes = zip.getText(contentTypesPath)
+    if (!contentTypes) throw new Error('Invalid XLSX: [Content_Types].xml not found')
+    if (!contentTypes.includes(`/xl/worksheets/sheet${partNumber}.xml`)) {
+      contentTypes = contentTypes.replace(
+        '</Types>',
+        `<Override PartName="/xl/worksheets/sheet${partNumber}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`
+      )
+    }
+
+    // The new sheet reuses the shell of an existing one (namespaces, views,
+    // formatting defaults) with an empty sheetData.
+    const basePath = this._resolveSheetPath(zip, { sheetIndex: 0 })
+    const baseXml = zip.getText(basePath) || ''
+    const blankSheetXml = baseXml.includes('<sheetData')
+      ? baseXml.replace(/<sheetData[\s\S]*?<\/sheetData>|<sheetData\s*\/>/, '<sheetData/>')
+      : this._blankWorksheetXml()
+
+    const newSheetEntry = `<sheet name="${escapeXml(sheetName)}" sheetId="${sheetId}" r:id="${relId}"/>`
+    let updatedWorkbook = workbookXml
+    if (index !== null && Number.isInteger(index) && index >= 0 && index < existingSheets.length) {
+      updatedWorkbook = updatedWorkbook.replace(
+        existingSheets[index].outerXml,
+        `${newSheetEntry}${existingSheets[index].outerXml}`
+      )
+    } else {
+      updatedWorkbook = updatedWorkbook.replace('</sheets>', `${newSheetEntry}</sheets>`)
+    }
+
+    zip.setBuffer(sheetPath, Buffer.from(blankSheetXml, 'utf8'))
+    zip.setText(relsPath, relsXml)
+    zip.setText(contentTypesPath, contentTypes)
+    zip.setText('xl/workbook.xml', updatedWorkbook)
+
+    const dir = path.dirname(outputPath)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    await zip.save(outputPath)
+
+    const sheetIndex = index !== null && Number.isInteger(index) && index >= 0
+      ? Math.min(index, existingSheets.length)
+      : existingSheets.length
+
+    if (data && Array.isArray(data) && data.length > 0) {
+      await this.write(outputPath, { sheetName, matrix: data, startCell: 'A1' })
+    }
+
+    return { success: true, name: sheetName, sheetIndex, outputPath }
+  }
+
+  /** Keep worksheet names unique, as Excel and R7 require. */
+  _uniqueSheetName(desired, usedNames) {
+    const taken = new Set(usedNames.map((n) => n.toLowerCase()))
+    if (!taken.has(desired.toLowerCase())) return desired
+    let n = 2
+    while (taken.has(`${desired}${n}`.toLowerCase())) n++
+    return `${desired}${n}`
+  }
+
+  _blankWorksheetXml() {
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+      + '<dimension ref="A1"/><sheetData/></worksheet>'
+  }
+
+  /**
    * Create a new XLSX workbook from template or clean structure.
    * @param {string} outputPath
    * @param {object} [options]
    * @returns {Promise<{success: boolean, path: string}>}
    */
   async create(outputPath, options = {}) {
-    const { sheets = [{ name: 'Лист1', data: [] }] } = options
+    const { sheets = [{ name: 'Лист1', data: [] }], overwrite = false } = options
+
+    if (fs.existsSync(outputPath) && overwrite !== true) {
+      throw new Error(
+        `Refusing to overwrite: ${outputPath} already exists. Pass overwrite: true to replace it.`
+      )
+    }
 
     const tplPath = await this.r7Adapter.getTemplatePath('xlsx')
     let zip
@@ -345,11 +543,33 @@ export class XlsxEngine {
 
     const dir = path.dirname(outputPath)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+
+    // The template ships exactly one worksheet; rename it to the caller's
+    // first sheet so every requested name is honoured.
+    const requested = Array.isArray(sheets) && sheets.length > 0
+      ? sheets
+      : [{ name: 'Лист1', data: [] }]
+    const firstName = requested[0].name || 'Лист1'
+    const workbookXml = zip.getText('xl/workbook.xml') || ''
+    const firstSheet = extractElements(workbookXml, 'sheet')[0]
+    if (firstSheet) {
+      const original = firstSheet.outerXml
+      const renamed = original.replace(/\sname="[^"]*"/, ` name="${escapeXml(firstName)}"`)
+      zip.setText('xl/workbook.xml', workbookXml.replace(original, renamed))
+    }
+
     await zip.save(outputPath)
 
-    // Write initial data if provided
-    if (sheets[0]?.data?.length > 0) {
-      await this.write(outputPath, { matrix: sheets[0].data, startCell: 'A1' })
+    // Fill sheet 1, then add and fill the rest.
+    if (requested[0].data?.length > 0) {
+      await this.write(outputPath, { sheetIndex: 0, matrix: requested[0].data, startCell: 'A1' })
+    }
+
+    for (let i = 1; i < requested.length; i++) {
+      await this.addSheet(outputPath, {
+        name: requested[i].name || `Лист${i + 1}`,
+        data: requested[i].data || null
+      })
     }
 
     return { success: true, path: outputPath }

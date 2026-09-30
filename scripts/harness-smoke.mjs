@@ -1,4 +1,4 @@
-/**
+﻿/**
  * DeepSeek Harness integration smoke test.
  *
  * Boots a fresh DeepSeek Harness process for a named profile on an ephemeral
@@ -25,8 +25,8 @@ const PROFILE = argValue('--profile', process.env.DSH_PROFILE || 'web')
 const DSH = argValue('--dsh', process.platform === 'win32' ? 'dsh.cmd' : 'dsh')
 const TIMEOUT_MS = Number(argValue('--timeout', '90')) * 1000
 
-const EXPECTED_TOOL_COUNT = 17
-const ACTIVATION_PATTERN = /\[r7-office\]\s*зарегистрировано инструментов:\s*(\d+)/u
+const EXPECTED_TOOL_COUNT = 18
+const ACTIVATION_PATTERN = /\[r7-office\]\s*Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРѕ РёРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ:\s*(\d+)/u
 const FAILURE_PATTERN = /r7-office.*did not activate|tool "r7_\w+" must declare output/u
 
 console.log(`booting a fresh DeepSeek Harness (profile "${PROFILE}") to verify plugin activation...`)
@@ -108,3 +108,4 @@ child.on('error', (err) => {
   }
   finish(1, `failed to launch dsh: ${err.message}`)
 })
+

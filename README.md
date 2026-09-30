@@ -99,7 +99,7 @@ Then verify the integration you actually intend to use:
 npm run test:live
 
 # DeepSeek Harness plugin activation. Boots a fresh Harness and asserts the
-# 17 r7_* tools reached the tool registry.
+# 18 r7_* tools reached the tool registry.
 npm run test:harness -- --profile web
 ```
 
@@ -121,7 +121,7 @@ dsh plugin --profile <profile> add /absolute/path/to/dsh-r7-office
 Confirm it activated — a fresh Harness boot prints:
 
 ```text
-[r7-office] зарегистрировано инструментов: 17 (r7_inspect, r7_read, ...); desktop bridge port=7888, developerMode=false
+[r7-office] зарегистрировано инструментов: 18 (r7_inspect, r7_read, ...); desktop bridge port=7888, developerMode=false
 ```
 
 > **Note.** Add the row **either** through `install_bundle` **or** by hand in
@@ -166,15 +166,16 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node src/mcp/cli.js
 |---|---|
 | `r7_inspect` | Document outline: headings, paragraphs, tables, sheets, slides, metadata |
 | `r7_read` | Structured text, Markdown view, or spreadsheet cell ranges |
-| `r7_create` | New DOCX / XLSX / PPTX |
+| `r7_create` | New DOCX / XLSX / PPTX. Refuses to replace an existing file unless `overwrite: true`; every `sheets[]` entry and name is honoured |
 | `r7_edit` | Replace, restyle or delete one paragraph by index |
 | `r7_replace` | Find and replace text, preserving run formatting |
 | `r7_insert` | Insert paragraphs, headings, bullet items or page breaks |
 | `r7_table` | Create, inspect or update tables and cells |
 | `r7_sheet_read` | Read values and formulas from a sheet or range (e.g. `A1:D10`) |
-| `r7_sheet_write` | Write cells or a 2-D matrix |
+| `r7_sheet_write` | Write cells or a 2-D matrix, addressed by sheet name or index |
+| `r7_sheet_add` | Add a worksheet to an existing workbook; other sheets are untouched |
 | `r7_sheet_formula` | Insert or update a formula |
-| `r7_slide_create` | Create a slide |
+| `r7_slide_create` | Create a deck, or **append** a slide to an existing one without altering the slides already there |
 | `r7_slide_edit` | Edit slide titles and text frames |
 | `r7_convert` | Convert via the R7 `x2t` engine (PDF, HTML, TXT, DOCX, XLSX, PPTX) |
 | `r7_validate` | Check package integrity and XML health |

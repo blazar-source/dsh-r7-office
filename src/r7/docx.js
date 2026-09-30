@@ -170,7 +170,13 @@ export class DocxEngine {
    * @returns {Promise<{success: boolean, path: string}>}
    */
   async create(outputPath, options = {}) {
-    const { title, paragraphs = [], tables = [] } = options
+    const { title, paragraphs = [], tables = [], overwrite = false } = options
+
+    if (fs.existsSync(outputPath) && overwrite !== true) {
+      throw new Error(
+        `Refusing to overwrite: ${outputPath} already exists. Pass overwrite: true to replace it.`
+      )
+    }
 
     // Try using native R7 template
     const tplPath = await this.r7Adapter.getTemplatePath('docx')

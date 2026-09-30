@@ -56,15 +56,16 @@
 |---|---|---|
 | `r7_inspect` | Inspection | Returns document hierarchy, metadata, sections, tables, sheets, slides |
 | `r7_read` | Reading | Extracts structured text, paragraphs by index/selector, tables, markdown preview |
-| `r7_create` | Generation | Creates fresh DOCX, XLSX, or PPTX documents from native templates |
+| `r7_create` | Generation | Creates fresh DOCX, XLSX, or PPTX documents. Refuses to replace an existing file unless `overwrite` is set; for XLSX every `sheets[]` entry and its name is honoured |
 | `r7_edit` | DOCX Modification | Modifies, replaces, or deletes paragraphs preserving original formatting runs |
 | `r7_replace` | DOCX Text | Finds and replaces text patterns/regex while keeping font, color, bold/italic intact |
 | `r7_insert` | DOCX Insertion | Inserts paragraphs, headings, bullet lists, or page breaks at designated positions |
 | `r7_table` | DOCX Tables | Creates, updates, or inspects tables, row cells, borders and shading |
-| `r7_sheet_read` | XLSX Data | Reads cell values, formulas, types from specific sheets and ranges (e.g. `A1:D10`) |
-| `r7_sheet_write` | XLSX Data | Writes values, styles, numbers, dates to sheets and cell ranges |
+| `r7_sheet_read` | XLSX Data | Reads cell values, formulas, types from a sheet or range (e.g. `A1:D10`), addressed by name or index |
+| `r7_sheet_write` | XLSX Data | Writes values, numbers and strings into a sheet or cell range, addressed by name or index |
+| `r7_sheet_add` | XLSX Structure | Adds a worksheet to an existing workbook, registering every required package part; existing sheets are never rewritten |
 | `r7_sheet_formula`| XLSX Math | Inserts or updates a formula in a cell |
-| `r7_slide_create` | PPTX Layout | Appends new slides with selected layout templates |
+| `r7_slide_create` | PPTX Structure | Creates a deck, or appends a slide to an existing one; the slides already present are not modified |
 | `r7_slide_edit` | PPTX Content | Edits text frames, titles, bullet points, and shape contents on slides |
 | `r7_convert` | Conversion | Converts between DOCX/XLSX/PPTX and PDF/HTML/TXT via R7 `x2t` converter |
 | `r7_validate` | Integrity | Validates document package integrity, XML schema validity, and repair checks |

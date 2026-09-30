@@ -7,8 +7,8 @@ import { R7McpServer } from '../../src/mcp/server.js'
 
 describe('R7McpServer End-to-End', () => {
   const tmpDir = path.join(os.tmpdir(), `dsh_mcp_e2e_${Date.now()}`)
-  const testDocx = path.join(tmpDir, 'Тестовый_документ.docx')
-  const outPdf = path.join(tmpDir, 'Тестовый_документ.pdf')
+  const testDocx = path.join(tmpDir, 'РўРµСЃС‚РѕРІС‹Р№_РґРѕРєСѓРјРµРЅС‚.docx')
+  const outPdf = path.join(tmpDir, 'РўРµСЃС‚РѕРІС‹Р№_РґРѕРєСѓРјРµРЅС‚.pdf')
   let server
 
   test('setup test directory and server', () => {
@@ -44,6 +44,7 @@ describe('R7McpServer End-to-End', () => {
     assert.ok(toolNames.includes('r7_table'))
     assert.ok(toolNames.includes('r7_sheet_read'))
     assert.ok(toolNames.includes('r7_sheet_write'))
+    assert.ok(toolNames.includes('r7_sheet_add'))
     assert.ok(toolNames.includes('r7_sheet_formula'))
     assert.ok(toolNames.includes('r7_slide_create'))
     assert.ok(toolNames.includes('r7_slide_edit'))
@@ -52,7 +53,7 @@ describe('R7McpServer End-to-End', () => {
     assert.ok(toolNames.includes('r7_desktop_status'))
     assert.ok(toolNames.includes('r7_desktop_selection'))
     assert.ok(toolNames.includes('r7_desktop_exec'))
-    assert.equal(toolNames.length, 17)
+    assert.equal(toolNames.length, 18)
   })
 
   test('should call r7_create via MCP', async () => {
@@ -64,10 +65,10 @@ describe('R7McpServer End-to-End', () => {
         name: 'r7_create',
         arguments: {
           filePath: testDocx,
-          title: 'Документ через MCP',
+          title: 'Р”РѕРєСѓРјРµРЅС‚ С‡РµСЂРµР· MCP',
           paragraphs: [
-            'Первый абзац, созданный через вызов MCP-инструмента.',
-            'Второй абзац с исходным текстом для замены.'
+            'РџРµСЂРІС‹Р№ Р°Р±Р·Р°С†, СЃРѕР·РґР°РЅРЅС‹Р№ С‡РµСЂРµР· РІС‹Р·РѕРІ MCP-РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°.',
+            'Р’С‚РѕСЂРѕР№ Р°Р±Р·Р°С† СЃ РёСЃС…РѕРґРЅС‹Рј С‚РµРєСЃС‚РѕРј РґР»СЏ Р·Р°РјРµРЅС‹.'
           ]
         }
       }
@@ -103,8 +104,8 @@ describe('R7McpServer End-to-End', () => {
         name: 'r7_replace',
         arguments: {
           filePath: testDocx,
-          search: 'Второй абзац с исходным текстом для замены.',
-          replace: 'Обновленный и проверенный абзац через MCP.'
+          search: 'Р’С‚РѕСЂРѕР№ Р°Р±Р·Р°С† СЃ РёСЃС…РѕРґРЅС‹Рј С‚РµРєСЃС‚РѕРј РґР»СЏ Р·Р°РјРµРЅС‹.',
+          replace: 'РћР±РЅРѕРІР»РµРЅРЅС‹Р№ Рё РїСЂРѕРІРµСЂРµРЅРЅС‹Р№ Р°Р±Р·Р°С† С‡РµСЂРµР· MCP.'
         }
       }
     })
@@ -121,7 +122,7 @@ describe('R7McpServer End-to-End', () => {
       }
     })
     const readData = JSON.parse(readRes.result.content[0].text)
-    assert.ok(readData.content.includes('Обновленный и проверенный абзац'))
+    assert.ok(readData.content.includes('РћР±РЅРѕРІР»РµРЅРЅС‹Р№ Рё РїСЂРѕРІРµСЂРµРЅРЅС‹Р№ Р°Р±Р·Р°С†'))
   })
 
   test('should call r7_validate via MCP', async () => {
@@ -179,3 +180,4 @@ describe('R7McpServer End-to-End', () => {
     }
   })
 })
+

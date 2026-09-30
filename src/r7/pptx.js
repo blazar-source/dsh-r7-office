@@ -106,7 +106,13 @@ export class PptxEngine {
    * @returns {Promise<{success: boolean, path: string}>}
    */
   async create(outputPath, options = {}) {
-    const { title = 'Новая презентация' } = options
+    const { title = 'Новая презентация', overwrite = false } = options
+
+    if (fs.existsSync(outputPath) && overwrite !== true) {
+      throw new Error(
+        `Refusing to overwrite: ${outputPath} already exists. Pass overwrite: true to replace it.`
+      )
+    }
 
     const tplPath = await this.r7Adapter.getTemplatePath('pptx')
     let zip
@@ -128,6 +134,156 @@ export class PptxEngine {
 
     await zip.save(outputPath)
     return { success: true, path: outputPath }
+  }
+
+  /**
+   * Append a slide to an existing presentation.
+   *
+   * Every part the OOXML part graph requires is registered: the slide itself,
+   * its relationship part (copying the base slide's layout link), the
+   * `[Content_Types].xml` override, the `<p:sldId>` entry and the presentation
+   * relationship. Slides that already exist are left untouched, so appending
+   * can never destroy a deck.
+   *
+   * @param {string} filePath
+   * @param {object} [options]
+   * @param {string} [options.title] - Title text for the new slide.
+   * @param {number} [options.baseSlideIndex] - 0-based slide to clone (default 0).
+   * @param {string} [options.outputPath]
+   * @returns {Promise<{success: boolean, slideNumber: number, slideCount: number, outputPath: string}>}
+   */
+  async addSlide(filePath, options = {}) {
+    const { outputPath = filePath, title = '', baseSlideIndex = 0 } = options
+
+    const zip = await ZipArchive.fromFile(filePath)
+    const presentationPath = 'ppt/presentation.xml'
+    const presentationXml = zip.getText(presentationPath)
+    if (!presentationXml) throw new Error('Invalid PPTX: ppt/presentation.xml not found')
+
+    // Fresh part number: one past the highest existing slideN.xml.
+    const partNumbers = zip.list()
+      .map((entry) => {
+        const m = entry.match(/^ppt\/slides\/slide(\d+)\.xml$/)
+        return m ? Number(m[1]) : 0
+      })
+      .filter(Boolean)
+    const newPart = partNumbers.length > 0 ? Math.max(...partNumbers) + 1 : 1
+
+    const basePart = partNumbers.includes(baseSlideIndex + 1)
+      ? baseSlideIndex + 1
+      : (partNumbers.length > 0 ? Math.min(...partNumbers) : 1)
+    const basePath = `ppt/slides/slide${basePart}.xml`
+
+    let slideXml = zip.getText(basePath) || this._blankSlideXml()
+    if (title) slideXml = this._setSlideTitle(slideXml, title)
+
+    // The cloned slide keeps the base slide's layout link but must not inherit
+    // its notes-slide relationship, which belongs to the base slide alone.
+    const baseRelsPath = `ppt/slides/_rels/slide${basePart}.xml.rels`
+    let slideRels = zip.getText(baseRelsPath)
+    if (slideRels) {
+      const layoutRel = extractElements(slideRels, 'Relationship')
+        .find((r) => /\/slideLayout$/.test(getAttribute(r.outerXml, 'Type') || ''))
+      slideRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + (layoutRel ? layoutRel.outerXml : '')
+        + '</Relationships>'
+    } else {
+      slideRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+    }
+
+    // Presentation relationship for the new slide.
+    const relsPath = 'ppt/_rels/presentation.xml.rels'
+    let relsXml = zip.getText(relsPath)
+    if (!relsXml) {
+      relsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'
+    }
+    const relIds = [...relsXml.matchAll(/Id="rId(\d+)"/g)].map((m) => Number(m[1]))
+    const newRelId = `rId${relIds.length > 0 ? Math.max(...relIds) + 1 : 1}`
+    relsXml = relsXml.replace(
+      '</Relationships>',
+      `<Relationship Id="${newRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${newPart}.xml"/></Relationships>`
+    )
+
+    // Content type override for the new slide part.
+    const contentTypesPath = '[Content_Types].xml'
+    let contentTypes = zip.getText(contentTypesPath)
+    if (!contentTypes) throw new Error('Invalid PPTX: [Content_Types].xml not found')
+    if (!contentTypes.includes(`/ppt/slides/slide${newPart}.xml`)) {
+      contentTypes = contentTypes.replace(
+        '</Types>',
+        `<Override PartName="/ppt/slides/slide${newPart}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>`
+      )
+    }
+
+    // <p:sldId> ids must be unique within the presentation.
+    const sldIds = [...presentationXml.matchAll(/<p:sldId id="(\d+)"/g)].map((m) => Number(m[1]))
+    const newSldId = sldIds.length > 0 ? Math.max(...sldIds) + 1 : 256
+    let updatedPresentation
+
+    if (presentationXml.includes('</p:sldIdLst>')) {
+      updatedPresentation = presentationXml.replace(
+        '</p:sldIdLst>',
+        `<p:sldId id="${newSldId}" r:id="${newRelId}"/></p:sldIdLst>`
+      )
+    } else if (presentationXml.includes('<p:sldIdLst/>')) {
+      updatedPresentation = presentationXml.replace(
+        '<p:sldIdLst/>',
+        `<p:sldIdLst><p:sldId id="${newSldId}" r:id="${newRelId}"/></p:sldIdLst>`
+      )
+    } else {
+      // A presentation with no slide list at all: insert one after the master
+      // list, which the schema requires to come first.
+      const sldIdLst = `<p:sldIdLst><p:sldId id="${newSldId}" r:id="${newRelId}"/></p:sldIdLst>`
+      updatedPresentation = /<\/p:sldMasterIdLst>/.test(presentationXml)
+        ? presentationXml.replace('</p:sldMasterIdLst>', `</p:sldMasterIdLst>${sldIdLst}`)
+        : presentationXml.replace('<p:presentation', `<p:presentation`).replace(/>/, `>${sldIdLst}`)
+    }
+
+    zip.setBuffer(`ppt/slides/slide${newPart}.xml`, Buffer.from(slideXml, 'utf8'))
+    zip.setText(`ppt/slides/_rels/slide${newPart}.xml.rels`, slideRels)
+    zip.setText(relsPath, relsXml)
+    zip.setText(contentTypesPath, contentTypes)
+    zip.setText(presentationPath, updatedPresentation)
+    this._syncSlideCount(zip, Math.max(...partNumbers, newPart))
+
+    const dir = path.dirname(outputPath)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    await zip.save(outputPath)
+
+    const slideCountAfter = extractElements(updatedPresentation, 'p:sldId').length
+    return {
+      success: true,
+      slideNumber: newPart,
+      slideCount: slideCountAfter,
+      outputPath
+    }
+  }
+
+  /**
+   * Keep the extended-properties slide count consistent when present. R7 and
+   * PowerPoint tolerate a stale value, but a correct one keeps validators quiet.
+   */
+  _syncSlideCount(zip, count) {
+    const appPath = 'docProps/app.xml'
+    const appXml = zip.getText(appPath)
+    if (!appXml || !/<Slides>\d+<\/Slides>/.test(appXml)) return
+    zip.setText(appPath, appXml.replace(/<Slides>\d+<\/Slides>/, `<Slides>${count}</Slides>`))
+  }
+
+  _blankSlideXml() {
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+      + ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+      + ' xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+      + '<p:cSld><p:spTree>'
+      + '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+      + '<p:grpSpPr/>'
+      + '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="ctrTitle"/></p:nvPr></p:nvSpPr>'
+      + '<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="ru-RU" dirty="0"/></a:p></p:txBody></p:sp>'
+      + '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>'
   }
 
   /**

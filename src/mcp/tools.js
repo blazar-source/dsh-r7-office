@@ -1,4 +1,5 @@
 import path from 'node:path'
+import fs from 'node:fs'
 import { DocxEngine } from '../r7/docx.js'
 import { XlsxEngine } from '../r7/xlsx.js'
 import { PptxEngine } from '../r7/pptx.js'
@@ -87,26 +88,34 @@ export function buildR7Tools(options = {}) {
 
     {
       name: 'r7_create',
-      description: 'Create a new blank or pre-populated DOCX, XLSX, or PPTX document using R7 native templates.',
+      description: 'Create a NEW DOCX, XLSX or PPTX document. Refuses to replace an existing file unless overwrite is true.',
       parameters: {
         type: 'object',
         required: ['filePath'],
         properties: {
           filePath: { type: 'string', description: 'Output destination path (.docx, .xlsx, or .pptx).' },
-          title: { type: 'string', description: 'Document title.' },
+          title: { type: 'string', description: 'Document title (DOCX/PPTX).' },
           paragraphs: {
             type: 'array',
-            description: 'List of initial paragraphs (strings or objects with text, style, bold, italic, align).',
+            description: 'DOCX: initial paragraphs (strings, or objects with text/style/bold/italic/align).',
             items: { type: 'string' }
           },
           tables: {
             type: 'array',
-            description: 'List of tables with 2D array of rows/cells.'
+            description: 'DOCX: list of tables, each with a 2D array of rows and cells.'
           },
           sheets: {
             type: 'array',
-            description: 'List of sheets for XLSX with name and 2D data matrix.'
-          }
+            description: 'XLSX: every worksheet to create, each { name, data } with a 2D data matrix. All entries and their names are honoured.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: 'Worksheet name.' },
+                data: { type: 'array', description: '2D matrix of cell values.' }
+              }
+            }
+          },
+          overwrite: { type: 'boolean', description: 'Set true to replace an existing file at filePath. Default false.' }
         }
       },
       output: defaultOutput(),
@@ -222,8 +231,12 @@ export function buildR7Tools(options = {}) {
         properties: {
           filePath: { type: 'string', description: 'Path to XLSX file.' },
           sheetIndex: { type: 'integer', description: '0-based sheet index.' },
-          sheetName: { type: 'string', description: 'Sheet name.' },
-          range: { type: 'string', description: 'Range reference (e.g. A1:C10).' }
+          sheetName: { type: 'string', description: 'Sheet name (takes precedence over sheetIndex).' },
+          range: { type: 'string', description: 'Range reference (e.g. A1:C10).' },
+          includeFormulas: {
+            type: 'boolean',
+            description: 'Also return the formulas matrix. Use it to verify a formula was written: a formula cell has no cached value until a spreadsheet engine recalculates the workbook.'
+          }
         }
       },
       output: defaultOutput(),
@@ -234,13 +247,14 @@ export function buildR7Tools(options = {}) {
 
     {
       name: 'r7_sheet_write',
-      description: 'Write values or 2D matrix into an XLSX spreadsheet.',
+      description: 'Write values or a 2D matrix into an XLSX worksheet, addressed by index or name.',
       parameters: {
         type: 'object',
         required: ['filePath'],
         properties: {
           filePath: { type: 'string', description: 'Path to XLSX file.' },
           sheetIndex: { type: 'integer', description: '0-based sheet index.' },
+          sheetName: { type: 'string', description: 'Sheet name (takes precedence over sheetIndex).' },
           startCell: { type: 'string', description: 'Starting cell (e.g. A1).' },
           matrix: { type: 'array', description: '2D matrix of values to write.' },
           cells: {
@@ -257,8 +271,28 @@ export function buildR7Tools(options = {}) {
     },
 
     {
+      name: 'r7_sheet_add',
+      description: 'Add a new worksheet to an existing XLSX workbook, optionally with initial data. Other sheets are left untouched.',
+      parameters: {
+        type: 'object',
+        required: ['filePath'],
+        properties: {
+          filePath: { type: 'string', description: 'Path to an existing XLSX file.' },
+          name: { type: 'string', description: 'New worksheet name (defaults to ЛистN; made unique automatically).' },
+          index: { type: 'integer', description: 'Position in the tab order; appended when omitted.' },
+          data: { type: 'array', description: 'Optional 2D matrix to write starting at A1.' },
+          outputPath: { type: 'string', description: 'Optional target path.' }
+        }
+      },
+      output: defaultOutput(),
+      async execute(args) {
+        return await xlsxEngine.addSheet(args.filePath, args)
+      }
+    },
+
+    {
       name: 'r7_sheet_formula',
-      description: 'Insert or update formulas in an XLSX spreadsheet cell.',
+      description: 'Insert or update a formula in an XLSX spreadsheet cell.',
       parameters: {
         type: 'object',
         required: ['filePath', 'cell', 'formula'],
@@ -267,6 +301,7 @@ export function buildR7Tools(options = {}) {
           cell: { type: 'string', description: 'Target cell reference (e.g. D2).' },
           formula: { type: 'string', description: 'Excel formula string (e.g. =SUM(A2:C2) or =B2*1.2).' },
           sheetIndex: { type: 'integer', description: '0-based sheet index.' },
+          sheetName: { type: 'string', description: 'Sheet name (takes precedence over sheetIndex).' },
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },
@@ -274,7 +309,8 @@ export function buildR7Tools(options = {}) {
       async execute(args) {
         return await xlsxEngine.write(args.filePath, {
           outputPath: args.outputPath,
-          sheetIndex: args.sheetIndex || 0,
+          sheetIndex: args.sheetIndex,
+          sheetName: args.sheetName,
           cells: [{ ref: args.cell, formula: args.formula }]
         })
       }
@@ -282,19 +318,25 @@ export function buildR7Tools(options = {}) {
 
     {
       name: 'r7_slide_create',
-      description: 'Create or append a slide in a PPTX presentation.',
+      description: 'Create a new PPTX deck, or append a slide to an existing one. Appending never modifies the slides already present.',
       parameters: {
         type: 'object',
         required: ['filePath'],
         properties: {
-          filePath: { type: 'string', description: 'Path to PPTX file.' },
-          title: { type: 'string', description: 'Slide title.' },
+          filePath: { type: 'string', description: 'Path to a PPTX file. A missing file is created; an existing one gets a new slide.' },
+          title: { type: 'string', description: 'Title text for the new slide (or for slide 1 when creating a deck).' },
+          baseSlideIndex: { type: 'integer', description: 'When appending: 0-based slide to clone the layout from (default 0).' },
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },
       output: defaultOutput(),
       async execute(args) {
-        return await pptxEngine.create(args.outputPath || args.filePath, args)
+        // Appending to an existing deck must never rebuild it from a template:
+        // that is data loss, not creation.
+        if (fs.existsSync(args.filePath)) {
+          return await pptxEngine.addSlide(args.filePath, args)
+        }
+        return await pptxEngine.create(args.filePath, { title: args.title })
       }
     },
 

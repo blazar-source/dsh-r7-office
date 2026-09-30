@@ -82,14 +82,15 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
 
   test('advertises exactly the documented tool set', async () => {
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 17)
+    assert.equal(tools.length, 18)
 
     const names = tools.map(t => t.name).sort()
     const expected = [
       'r7_convert', 'r7_create', 'r7_desktop_exec', 'r7_desktop_selection',
       'r7_desktop_status', 'r7_edit', 'r7_inspect', 'r7_insert', 'r7_read',
-      'r7_replace', 'r7_sheet_formula', 'r7_sheet_read', 'r7_sheet_write',
-      'r7_slide_create', 'r7_slide_edit', 'r7_table', 'r7_validate'
+      'r7_replace', 'r7_sheet_add', 'r7_sheet_formula', 'r7_sheet_read',
+      'r7_sheet_write', 'r7_slide_create', 'r7_slide_edit', 'r7_table',
+      'r7_validate'
     ].sort()
     assert.deepEqual(names, expected)
   })
@@ -108,10 +109,10 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
       name: 'r7_create',
       arguments: {
         filePath: docPath,
-        title: 'Внешний MCP клиент',
+        title: 'Р’РЅРµС€РЅРёР№ MCP РєР»РёРµРЅС‚',
         paragraphs: [
-          'Первый абзац, созданный сторонним MCP-клиентом.',
-          'Второй абзац для последующей замены.'
+          'РџРµСЂРІС‹Р№ Р°Р±Р·Р°С†, СЃРѕР·РґР°РЅРЅС‹Р№ СЃС‚РѕСЂРѕРЅРЅРёРј MCP-РєР»РёРµРЅС‚РѕРј.',
+          'Р’С‚РѕСЂРѕР№ Р°Р±Р·Р°С† РґР»СЏ РїРѕСЃР»РµРґСѓСЋС‰РµР№ Р·Р°РјРµРЅС‹.'
         ]
       }
     })
@@ -135,8 +136,8 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
       name: 'r7_replace',
       arguments: {
         filePath: docPath,
-        search: 'Второй абзац для последующей замены.',
-        replace: 'Абзац, заменённый внешним клиентом.'
+        search: 'Р’С‚РѕСЂРѕР№ Р°Р±Р·Р°С† РґР»СЏ РїРѕСЃР»РµРґСѓСЋС‰РµР№ Р·Р°РјРµРЅС‹.',
+        replace: 'РђР±Р·Р°С†, Р·Р°РјРµРЅС‘РЅРЅС‹Р№ РІРЅРµС€РЅРёРј РєР»РёРµРЅС‚РѕРј.'
       }
     })
     assert.ok(!res.isError)
@@ -146,7 +147,7 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
       arguments: { filePath: docPath, format: 'markdown' }
     })
     const data = JSON.parse(read.content[0].text)
-    assert.ok(data.content.includes('заменённый внешним клиентом'))
+    assert.ok(data.content.includes('Р·Р°РјРµРЅС‘РЅРЅС‹Р№ РІРЅРµС€РЅРёРј РєР»РёРµРЅС‚РѕРј'))
   })
 
   test('validates through the external client', async () => {
@@ -202,3 +203,4 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
     assert.equal(data.developerMode, false, 'production mode keeps arbitrary code disabled')
   })
 })
+

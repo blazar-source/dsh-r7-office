@@ -1,0 +1,5 @@
+# dsh-r7-office bundle patch: adds the R7-Office plugin to the profile roster.
+# Provides r7_* tools directly to the DeepSeek Harness agent and connects to local R7-Office.
+- insert:
+    - id: r7-office
+      name: 'dsh-r7-office'

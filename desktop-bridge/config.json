@@ -1,0 +1,24 @@
+{
+  "name": "DSH R7 Bridge",
+  "guid": "asc.{D5B29457-194D-4E9A-A37F-02D739818FE1}",
+  "version": "1.0.0",
+  "variations": [
+    {
+      "description": "DeepSeek Harness live bridge for R7-Office Desktop editors",
+      "url": "index.html",
+      "icons": [
+        "resources/icon.png",
+        "resources/icon@2x.png"
+      ],
+      "isVisual": false,
+      "isModal": false,
+      "isInsideMode": false,
+      "initOn": ["init"],
+      "initDataType": "none",
+      "initData": "",
+      "buttons": [],
+      "size": [0, 0],
+      "EditorsSupport": ["word", "cell", "slide"]
+    }
+  ]
+}

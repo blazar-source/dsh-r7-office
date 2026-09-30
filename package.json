@@ -1,0 +1,59 @@
+{
+  "name": "dsh-r7-office",
+  "version": "0.1.0",
+  "description": "R7-Office (Р7-Офис) document processing plugin & MCP server for DeepSeek Harness (DOCX, XLSX, PPTX, PDF, Desktop Bridge)",
+  "main": "src/plugin/index.js",
+  "type": "module",
+  "bin": {
+    "dsh-r7-mcp": "./src/mcp/cli.js"
+  },
+  "exports": {
+    ".": "./src/plugin/index.js",
+    "./mcp": "./src/mcp/server.js",
+    "./r7": "./src/r7/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "desktop-bridge",
+    "cordis.patch.yml",
+    "README.md",
+    "README.ru.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "start": "node src/mcp/cli.js",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "test:unit": "node --test \"tests/unit/**/*.test.js\"",
+    "test:integration": "node --test \"tests/integration/**/*.test.js\"",
+    "test:e2e": "node --test \"tests/e2e/**/*.test.js\""
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "mcp",
+    "mcp-server",
+    "r7-office",
+    "r7",
+    "office",
+    "docx",
+    "xlsx",
+    "pptx",
+    "pdf",
+    "document-builder",
+    "ooxml"
+  ],
+  "author": "DSH R7-Office Contributors",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

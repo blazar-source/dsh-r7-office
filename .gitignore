@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+temp/
+coverage/
+.env
+.env.local
+test_output/
+*.pdf
+!tests/fixtures/*.pdf
+!examples/**/*.pdf

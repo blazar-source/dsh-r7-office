@@ -20,10 +20,11 @@
     "scripts/live-desktop-e2e.mjs",
     "scripts/live-cdp-inspect.mjs",
     "scripts/harness-smoke.mjs",
+    "scripts/clean-install-check.mjs",
     "cordis.patch.yml",
     "README.md",
     "README.ru.md",
-    "LICENSE",
+    "SECURITY.md",
     "CHANGELOG.md"
   ],
   "dsh": {
@@ -39,6 +40,7 @@
     "test:e2e": "node --test \"tests/e2e/**/*.test.js\"",
     "test:live": "node scripts/live-desktop-e2e.mjs",
     "test:harness": "node scripts/harness-smoke.mjs",
+    "test:clean-install": "node scripts/clean-install-check.mjs",
     "inspect:r7": "node scripts/live-cdp-inspect.mjs"
   },
   "keywords": [

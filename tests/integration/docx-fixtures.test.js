@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import zlib from 'node:zlib'
+import { pathToFileURL } from 'node:url'
 import { probeImage } from '../../src/r7/docx-media.js'
 import { ZipArchive } from '../../src/shared/zip.js'
 
@@ -177,48 +178,58 @@ export async function archiveOf(filePath) {
   return ZipArchive.fromFile(filePath)
 }
 
-describe('DOCX fixtures', () => {
-  test('the generated PNG is a valid image with the requested dimensions', () => {
-    const png = makePng(4, 2)
-    assert.ok(png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
-    assert.equal(png.toString('ascii', 12, 16), 'IHDR')
-    // The IHDR chunk CRC written by the encoder must verify.
-    const ihdrBody = png.subarray(12, 12 + 4 + 13)
-    assert.equal(png.readUInt32BE(12 + 4 + 13), crc32(ihdrBody))
+/**
+ * The self-tests below run only when this file is the one the test runner was
+ * pointed at. Every other DOCX suite imports the helpers from here, and without
+ * this guard the runner would execute these four tests once per importing file.
+ */
+const isEntryPoint = Boolean(process.argv[1])
+  && import.meta.url === pathToFileURL(process.argv[1]).href
 
-    const probed = probeImage(png)
-    assert.equal(probed.format, 'png')
-    assert.equal(probed.pixelWidth, 4)
-    assert.equal(probed.pixelHeight, 2)
-    assert.equal(probed.contentType, 'image/png')
+if (isEntryPoint) {
+  describe('DOCX fixtures', () => {
+    test('the generated PNG is a valid image with the requested dimensions', () => {
+      const png = makePng(4, 2)
+      assert.ok(png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+      assert.equal(png.toString('ascii', 12, 16), 'IHDR')
+      // The IHDR chunk CRC written by the encoder must verify.
+      const ihdrBody = png.subarray(12, 12 + 4 + 13)
+      assert.equal(png.readUInt32BE(12 + 4 + 13), crc32(ihdrBody))
+
+      const probed = probeImage(png)
+      assert.equal(probed.format, 'png')
+      assert.equal(probed.pixelWidth, 4)
+      assert.equal(probed.pixelHeight, 2)
+      assert.equal(probed.contentType, 'image/png')
+    })
+
+    test('the JPEG probe reads the start-of-frame dimensions', () => {
+      const probed = probeImage(makeJpegHeader(320, 200))
+      assert.equal(probed.format, 'jpeg')
+      assert.equal(probed.pixelWidth, 320)
+      assert.equal(probed.pixelHeight, 200)
+    })
+
+    test('an unknown payload is reported as unknown rather than guessed', () => {
+      const probed = probeImage(Buffer.from('this is not an image at all'))
+      assert.equal(probed.format, null)
+      assert.equal(probed.pixelWidth, null)
+    })
+
+    test('diffMembers reports only the parts that actually changed', () => {
+      const before = new ZipArchive()
+      before.setText('a.txt', 'a')
+      before.setText('b.txt', 'b')
+
+      const after = ZipArchive.fromBuffer(before.toBuffer())
+      after.setText('a.txt', 'changed')
+
+      const diff = diffMembers(before, after)
+      assert.deepEqual(diff.changed, ['a.txt'])
+      assert.deepEqual(diff, { changed: ['a.txt'], added: [], removed: [] })
+
+      const allowed = diffMembers(before, after, ['a.txt'])
+      assert.deepEqual(allowed.changed, [])
+    })
   })
-
-  test('the JPEG probe reads the start-of-frame dimensions', () => {
-    const probed = probeImage(makeJpegHeader(320, 200))
-    assert.equal(probed.format, 'jpeg')
-    assert.equal(probed.pixelWidth, 320)
-    assert.equal(probed.pixelHeight, 200)
-  })
-
-  test('an unknown payload is reported as unknown rather than guessed', () => {
-    const probed = probeImage(Buffer.from('this is not an image at all'))
-    assert.equal(probed.format, null)
-    assert.equal(probed.pixelWidth, null)
-  })
-
-  test('diffMembers reports only the parts that actually changed', () => {
-    const before = new ZipArchive()
-    before.setText('a.txt', 'a')
-    before.setText('b.txt', 'b')
-
-    const after = ZipArchive.fromBuffer(before.toBuffer())
-    after.setText('a.txt', 'changed')
-
-    const diff = diffMembers(before, after)
-    assert.deepEqual(diff.changed, ['a.txt'])
-    assert.deepEqual(diff, { changed: ['a.txt'], added: [], removed: [] })
-
-    const allowed = diffMembers(before, after, ['a.txt'])
-    assert.deepEqual(allowed.changed, [])
-  })
-})
+}

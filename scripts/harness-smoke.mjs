@@ -15,6 +15,8 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import process from 'node:process'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 function argValue(flag, fallback) {
   const i = process.argv.indexOf(flag)
@@ -25,7 +27,22 @@ const PROFILE = argValue('--profile', process.env.DSH_PROFILE || 'web')
 const DSH = argValue('--dsh', process.platform === 'win32' ? 'dsh.cmd' : 'dsh')
 const TIMEOUT_MS = Number(argValue('--timeout', '90')) * 1000
 
-const EXPECTED_TOOL_COUNT = 18
+// The expected count comes from the source itself, so this check verifies that
+// the tools the plugin actually registers in a live Harness match the tools the
+// code declares, instead of going stale whenever one is added.
+const here = path.dirname(fileURLToPath(import.meta.url))
+let EXPECTED_TOOL_COUNT = 0
+let EXPECTED_TOOL_NAMES = []
+try {
+  const { buildR7Tools } = await import(pathToFileURL(path.join(here, '..', 'src', 'mcp', 'tools.js')).href)
+  const built = buildR7Tools({ enableDesktopBridge: false })
+  EXPECTED_TOOL_COUNT = built.length
+  EXPECTED_TOOL_NAMES = built.map((t) => t.name)
+} catch (err) {
+  console.error(`could not read the declared tool set: ${err.message}`)
+  process.exit(1)
+}
+
 const ACTIVATION_PATTERN = /\[r7-office\]\s*зарегистрировано инструментов:\s*(\d+)/u
 const FAILURE_PATTERN = /r7-office.*did not activate|tool "r7_\w+" must declare output/u
 
@@ -94,16 +111,28 @@ function onChunk(buf, source) {
   if (match) {
     const count = Number(match[1])
     if (count !== EXPECTED_TOOL_COUNT) {
-      finish(1, `plugin registered ${count} tools, expected ${EXPECTED_TOOL_COUNT}`)
+      finish(1, `plugin registered ${count} tools, but the source declares ${EXPECTED_TOOL_COUNT}`)
       return
     }
-    const toolNames = (combined.match(/\(([^)]*r7_inspect[^)]*)\)/) || [])[1] || ''
+    // Check the registered names, not just the count: a count alone would pass
+    // even if a tool were silently replaced by another.
+    const declared = (combined.match(/\(([^)]*r7_[^)]*)\)/) || [])[1] || ''
+    const registered = declared.split(',').map((s) => s.trim()).filter(Boolean)
+    const missing = EXPECTED_TOOL_NAMES.filter((n) => !registered.includes(n))
+    const extra = registered.filter((n) => !EXPECTED_TOOL_NAMES.includes(n))
+    if (missing.length || extra.length) {
+      finish(1, `registered tools differ from the declared set`
+        + (missing.length ? `\n  missing: ${missing.join(', ')}` : '')
+        + (extra.length ? `\n  unexpected: ${extra.join(', ')}` : ''))
+      return
+    }
     const devModeOff = /developerMode=false/.test(combined)
     finish(
       0,
-      `plugin activated in DeepSeek Harness: ${count} tools registered\n` +
-      `  tools: ${toolNames}\n` +
-      `  arbitrary DocScript disabled by default: ${devModeOff}`
+      `plugin activated in DeepSeek Harness: ${count} tools registered, `
+      + `matching the declared set\n`
+      + `  tools: ${registered.join(', ')}\n`
+      + `  arbitrary DocScript disabled by default: ${devModeOff}`
     )
   }
 }

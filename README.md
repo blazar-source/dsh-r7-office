@@ -99,7 +99,7 @@ Then verify the integration you actually intend to use:
 npm run test:live
 
 # DeepSeek Harness plugin activation. Boots a fresh Harness and asserts the
-# 18 r7_* tools reached the tool registry.
+# 27 r7_* tools reached the tool registry.
 npm run test:harness -- --profile web
 ```
 
@@ -121,7 +121,7 @@ dsh plugin --profile <profile> add /absolute/path/to/dsh-r7-office
 Confirm it activated — a fresh Harness boot prints:
 
 ```text
-[r7-office] зарегистрировано инструментов: 18 (r7_inspect, r7_read, ...); desktop bridge port=7888, developerMode=false
+[r7-office] зарегистрировано инструментов: 27 (r7_inspect, r7_read, ...); desktop bridge port=7888, developerMode=false
 ```
 
 > **Note.** Add the row **either** through `install_bundle` **or** by hand in
@@ -170,9 +170,15 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node src/mcp/cli.js
 | `r7_edit` | Replace, restyle or delete one paragraph by index |
 | `r7_replace` | Find and replace text, preserving run formatting |
 | `r7_insert` | Insert paragraphs, headings, bullet items or page breaks |
-| `r7_table` | Create, inspect or update tables and cells |
-| `r7_sheet_read` | Read values and formulas from a sheet or range (e.g. `A1:D10`) |
-| `r7_sheet_write` | Write cells or a 2-D matrix, addressed by sheet name or index |
+| `r7_table` | Create, inspect or update tables and cells, including merge, borders, shading and column widths |
+| `r7_docx_formatting` | Read the normalized formatting of every paragraph, run and table cell: style, font, size, colour, alignment, indents, spacing, line spacing, lists |
+| `r7_docx_sections` | Read and set page size, orientation, margins, columns, page breaks and section breaks |
+| `r7_docx_header_footer` | List, read, create or retitle headers and footers; page-number fields survive |
+| `r7_docx_image` | Insert a PNG/JPEG/GIF at a size, keeping the aspect ratio |
+| `r7_docx_hyperlink` | List, insert, retitle or remove hyperlinks and their relationships |
+| `r7_sheet_read` | Read values, formulas or the normalized formatting of a sheet or range (e.g. `A1:D10`) |
+| `r7_sheet_write` | Write cells or a 2-D matrix, addressed by sheet name or index; dates are stored as real date serials |
+| `r7_sheet_format` | Format a cell or range: font, background, borders, alignment, wrap, number format (integer, decimal, currency, percent, date, datetime, custom), merge, column width and row height |
 | `r7_sheet_add` | Add a worksheet to an existing workbook; other sheets are untouched |
 | `r7_sheet_formula` | Insert or update a formula |
 | `r7_slide_read` | Read a slide as a normalized structure: every object's id, type, geometry, text, font, fill, stroke, alignment and paragraphs |
@@ -367,6 +373,24 @@ vulnerability.
 - **Format coverage.** Reading and editing cover the common OOXML surface
   listed above. Charts, embedded objects, SmartArt and tracked changes are
   preserved but not editable through these tools.
+- **DOCX: not implemented in v0.1.0.** Replacing or resizing an *existing*
+  image; assigning a table style (`tblStyle`); changing a hyperlink's target
+  (retitle, or remove and insert instead); a convenience wrapper for per-section
+  different headers (both can be read and preserved, and `r7_docx_header_footer`
+  accepts `first`/`even` — for `first` also call `r7_docx_sections` with
+  `titlePg`). Search is not revision-aware: `r7_replace` scans raw `<w:t>`, so
+  text inside a tracked insertion is editable and paragraph indices count
+  paragraphs inside deleted content — `<w:delText>` is never matched.
+- **DOCX: comments, tracked changes, footnotes, endnotes, a table of contents,
+  equations and embedded objects are preserved, never edited.** A test asserts
+  they survive an ordinary edit with every part byte-identical.
+- **XLSX: not implemented in v0.1.0.** Cell styles are limited to the
+  properties listed for `r7_sheet_format`; conditional formatting, data
+  validation, charts, pivot tables and defined names are preserved but not
+  editable.
+- **PPTX: SmartArt, charts, animations and transitions are preserved, never
+  authored.** The engine cannot create SmartArt (a hand-written frame is only a
+  `dgm:relIds` reference), and editing their content is out of scope.
 - **No concurrent editing.** File tools operate on a document at rest. For a
   document the user has open, use the desktop bridge; the file tools assume
   the file is not locked by another process.

@@ -289,10 +289,12 @@ describe('File E2E: full document workflow', () => {
     })
 
     test('edits the slide title', async () => {
-      const result = await call('r7_slide_edit', {
+      // Text and styling live in r7_slide_format; r7_slide_edit manages the
+      // deck's slide structure (duplicate, move, reorder, delete).
+      const result = await call('r7_slide_format', {
         filePath: deck,
         slideIndex: 0,
-        title: 'Обновлённый заголовок презентации'
+        text: 'Обновлённый заголовок презентации'
       })
       assert.equal(result.success, true)
 

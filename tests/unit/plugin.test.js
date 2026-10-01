@@ -37,14 +37,16 @@ describe('DSH R7 Office Plugin', () => {
 
     apply(mockCtx, { enableDesktopBridge: false })
 
-    assert.equal(registeredTools.length, 19)
+    assert.equal(registeredTools.length, 27)
     assert.ok(registeredTools.some(t => t.name === 'r7_inspect'))
     assert.ok(registeredTools.some(t => t.name === 'r7_replace'))
     assert.ok(registeredTools.some(t => t.name === 'r7_table'))
     assert.ok(registeredTools.some(t => t.name === 'r7_sheet_write'))
     assert.ok(registeredTools.some(t => t.name === 'r7_sheet_add'))
     assert.ok(registeredTools.some(t => t.name === 'r7_sheet_format'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_slide_edit'))
+    assert.ok(registeredTools.some(t => t.name === 'r7_docx_formatting'))
+    assert.ok(registeredTools.some(t => t.name === 'r7_slide_read'))
+    assert.ok(registeredTools.some(t => t.name === 'r7_slide_object'))
     assert.ok(registeredTools.some(t => t.name === 'r7_convert'))
     assert.ok(registeredTools.some(t => t.name === 'r7_validate'))
 

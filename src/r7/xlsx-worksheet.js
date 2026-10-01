@@ -13,7 +13,27 @@
  *     cell's value, type or formula.
  */
 
-import { escapeXml, getAttribute, extractElements } from '../shared/xml.js'
+import { escapeXml, extractElements } from '../shared/xml.js'
+
+/**
+ * Read an attribute from an opening tag, matching the whole attribute name.
+ *
+ * A bare `name="…"` search is not enough: `width` also appears inside
+ * `customWidth`, and `s` inside `spans`. R7's own writer emits
+ * `<col customWidth="1" min="1" max="1" width="14"/>`, so an unanchored search
+ * reports the width of a column as 1 — the value of `customWidth`. The leading
+ * boundary (start of tag or whitespace) makes the match exact.
+ *
+ * @param {string} tagXml
+ * @param {string} name
+ * @returns {string|null}
+ */
+export function attr(tagXml, name) {
+  if (!tagXml) return null
+  const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = String(tagXml).match(new RegExp(`(?:^|[\\s<])${escaped}\\s*=\\s*["']([^"']*)["']`))
+  return match ? match[1] : null
+}
 
 /** Convert a column letter to a 0-based index (`A` -> 0, `AA` -> 26). */
 export function colToIndex(letters) {
@@ -92,22 +112,28 @@ export function normalizeRange(range) {
 /** Split `<sheetData>` into ordered row XML strings, keyed by row number. */
 function parseRows(sheetXml) {
   const sheetData = extractElements(sheetXml, 'sheetData')[0]
-  if (!sheetData) return { open: '<sheetData>', close: '</sheetData>', rows: new Map(), present: false }
+  if (!sheetData) return { open: '<sheetData>', rows: new Map(), present: false }
 
-  const inner = sheetData.innerXml
+  // A self-closing `<sheetData/>` cannot host rows, so the reopened form is
+  // used as the container tag from here on.
+  const openTag = sheetData.outerXml.match(/^<sheetData[^>]*>/)?.[0] || '<sheetData>'
   const rows = new Map()
-  for (const row of extractElements(inner, 'row')) {
-    const r = Number(getAttribute(row.outerXml, 'r'))
+  for (const row of extractElements(sheetData.innerXml, 'row')) {
+    const r = Number(attr(row.outerXml, 'r'))
     if (Number.isFinite(r)) rows.set(r, row.outerXml)
   }
-  return { open: '<sheetData>', close: '</sheetData>', rows, present: true }
+  return {
+    open: openTag.endsWith('/>') ? '<sheetData>' : openTag,
+    rows,
+    present: true
+  }
 }
 
 /** Re-emit `<sheetData>` with rows in ascending order. */
 function renderRows(parsed) {
   const numbers = [...parsed.rows.keys()].sort((a, b) => a - b)
   const body = numbers.map((n) => parsed.rows.get(n)).join('')
-  return `<sheetData>${body}</sheetData>`
+  return `${parsed.open}${body}</sheetData>`
 }
 
 /** Replace the `<sheetData>` element with a rebuilt one. */
@@ -121,7 +147,7 @@ function replaceSheetData(sheetXml, rendered) {
 function parseRowCells(rowXml) {
   const cells = new Map()
   for (const c of extractElements(rowXml, 'c')) {
-    const ref = getAttribute(c.outerXml, 'r')
+    const ref = attr(c.outerXml, 'r')
     if (!ref) continue
     cells.set(colToIndex(ref.replace(/[^A-Za-z]/g, '')), c.outerXml)
   }
@@ -135,18 +161,28 @@ function renderRow(rowNum, rowAttrs, cells) {
   return `<row r="${rowNum}"${rowAttrs}>${body}</row>`
 }
 
-/** Row-level attributes worth preserving when a row is rebuilt. */
-function rowAttributes(rowXml) {
+/**
+ * Row-level attributes worth preserving when a row is rebuilt.
+ *
+ * Everything except `r` is kept: a cell edit must not discard the row's height,
+ * its hidden flag or any attribute this module does not model. Only
+ * {@link setRowHeight} asks for the height to be dropped, because it is about
+ * to write a new one.
+ */
+function rowAttributes(rowXml, { dropHeight = false } = {}) {
   if (!rowXml) return ''
   const open = rowXml.match(/^<row[^>]*>/)
   if (!open) return ''
-  return open[0]
+  let attrs = open[0]
     .replace(/^<row/, '')
     .replace(/>$/, '')
     .replace(/\s*r="[^"]*"/, '')
-    .replace(/\s*ht="[^"]*"/, '')
-    .replace(/\s*customHeight="[^"]*"/, '')
-    .replace(/\s*spans="[^"]*"/, '')
+  if (dropHeight) {
+    attrs = attrs
+      .replace(/\s*ht="[^"]*"/, '')
+      .replace(/\s*customHeight="[^"]*"/, '')
+  }
+  return attrs
 }
 
 /**
@@ -179,11 +215,16 @@ function withCell(sheetXml, ref, mutate) {
   }
 
   const updated = mutate(openTag, inner)
+  // Content cannot live inside a self-closing tag, so a cell that had no
+  // payload until now is reopened before the payload is written.
+  const cellOpenTag = updated.inner && updated.openTag.endsWith('/>')
+    ? `${updated.openTag.slice(0, -2)}>`
+    : updated.openTag
   const cellXml = updated.inner
-    ? `${updated.openTag}${updated.inner}</c>`
-    : updated.openTag.endsWith('/>')
-      ? updated.openTag
-      : `${updated.openTag}</c>`
+    ? `${cellOpenTag}${updated.inner}</c>`
+    : cellOpenTag.endsWith('/>')
+      ? cellOpenTag
+      : `${cellOpenTag}</c>`
 
   cells.set(col, cellXml)
   parsed.rows.set(rowNum, renderRow(rowNum, attrs, cells))
@@ -235,6 +276,35 @@ export function ensureCell(sheetXml, ref) {
   return withCell(sheetXml, ref, (openTag, inner) => ({ openTag, inner }))
 }
 
+/**
+ * Replace a cell's payload while keeping its style and every attribute this
+ * module does not model.
+ *
+ * Writing a value must not silently unformat the cell, and it must not reorder
+ * the row: both are handled here because the cell element is looked up and
+ * re-emitted in place.
+ *
+ * @param {string} sheetXml
+ * @param {string} ref
+ * @param {{content?: string, type?: string|null, xfIndex?: number|null}} spec
+ *   `type` is the OOXML `t` attribute (`inlineStr`, `str`, …) or null to drop
+ *   it; `xfIndex` is only applied when provided (null or 0 clears the style).
+ * @returns {string}
+ */
+export function setCellContent(sheetXml, ref, spec = {}) {
+  const { content = '', type = null, xfIndex } = spec
+  return withCell(sheetXml, ref, (openTag) => {
+    let tag = removeAttr(openTag, 't')
+    if (type) tag = setAttr(tag, 't', type)
+    if (xfIndex !== undefined) {
+      tag = xfIndex === null || xfIndex === 0
+        ? removeAttr(tag, 's')
+        : setAttr(tag, 's', xfIndex)
+    }
+    return { openTag: tag, inner: content }
+  })
+}
+
 /** The cell format index of a cell, or null when it has none. */
 export function getCellStyle(sheetXml, ref) {
   const { row, col } = parseRef(ref)
@@ -243,7 +313,7 @@ export function getCellStyle(sheetXml, ref) {
   if (!rowXml) return null
   const cell = parseRowCells(rowXml).get(col)
   if (!cell) return null
-  const s = getAttribute(cell, 's')
+  const s = attr(cell, 's')
   return s === null || s === undefined ? null : Number(s)
 }
 
@@ -252,7 +322,7 @@ export function getMergedCells(sheetXml) {
   const container = extractElements(sheetXml, 'mergeCells')[0]
   if (!container) return []
   return extractElements(container.outerXml, 'mergeCell')
-    .map((m) => getAttribute(m.outerXml, 'ref'))
+    .map((m) => attr(m.outerXml, 'ref'))
     .filter(Boolean)
 }
 
@@ -289,11 +359,41 @@ export function setMergedCells(sheetXml, changes = {}) {
   return replaceDimensions(updated)
 }
 
-/** Keep `<dimension>` roughly honest after structural edits. */
+/**
+ * The used range of the worksheet, derived from the cells actually present.
+ * @returns {string|null} an A1 or A1:B2 reference, or null for an empty sheet.
+ */
+export function getUsedRange(sheetXml) {
+  const parsed = parseRows(sheetXml)
+  let minRow = Infinity, maxRow = -1, minCol = Infinity, maxCol = -1
+  for (const [rowNum, rowXml] of parsed.rows) {
+    for (const col of parseRowCells(rowXml).keys()) {
+      if (rowNum < minRow) minRow = rowNum
+      if (rowNum > maxRow) maxRow = rowNum
+      if (col < minCol) minCol = col
+      if (col > maxCol) maxCol = col
+    }
+  }
+  if (maxRow === -1) return null
+  const first = buildRef(minRow - 1, minCol)
+  const last = buildRef(maxRow - 1, maxCol)
+  return first === last ? first : `${first}:${last}`
+}
+
+/**
+ * Keep `<dimension>` honest after structural edits.
+ *
+ * The hint is recomputed from the cells that are really there rather than
+ * blanked, and it is left alone when it is already correct — an edit must not
+ * churn a part more than the caller asked for.
+ */
 function replaceDimensions(sheetXml) {
   const dimension = extractElements(sheetXml, 'dimension')[0]
   if (!dimension) return sheetXml
-  return sheetXml.replace(dimension.outerXml, '<dimension ref="A1"/>')
+  const bounds = getUsedRange(sheetXml) || 'A1'
+  if (attr(dimension.outerXml, 'ref') === bounds) return sheetXml
+  const updated = dimension.outerXml.replace(/ref=["'][^"']*["']/, `ref="${bounds}"`)
+  return sheetXml.replace(dimension.outerXml, updated)
 }
 
 /**
@@ -313,10 +413,13 @@ export function setColumnWidth(sheetXml, spec) {
   const container = extractElements(sheetXml, 'cols')[0]
   const cols = container
     ? extractElements(container.outerXml, 'col').map((c) => ({
-      min: Number(getAttribute(c.outerXml, 'min')),
-      max: Number(getAttribute(c.outerXml, 'max')),
-      width: Number(getAttribute(c.outerXml, 'width')),
-      customWidth: getAttribute(c.outerXml, 'customWidth')
+      // The original tag is kept so attributes this module does not model
+      // (a column-level style, bestFit, …) survive a width change.
+      raw: c.outerXml,
+      min: Number(attr(c.outerXml, 'min')),
+      max: Number(attr(c.outerXml, 'max')),
+      width: Number(attr(c.outerXml, 'width')),
+      customWidth: attr(c.outerXml, 'customWidth')
     }))
     : []
 
@@ -324,6 +427,11 @@ export function setColumnWidth(sheetXml, spec) {
   // columns keep the width the author gave them.
   const rebuilt = []
   for (const col of cols) {
+    if (!Number.isFinite(col.min) || !Number.isFinite(col.max)) {
+      // A span we cannot interpret is carried through rather than mangled.
+      rebuilt.push(col)
+      continue
+    }
     if (col.max < min || col.min > max) {
       rebuilt.push(col)
       continue
@@ -331,11 +439,17 @@ export function setColumnWidth(sheetXml, spec) {
     if (col.min < min) rebuilt.push({ ...col, max: min - 1 })
     if (col.max > max) rebuilt.push({ ...col, min: max + 1 })
   }
-  rebuilt.push({ min, max, width, customWidth: '1' })
+  rebuilt.push({ min, max, width, customWidth: '1', raw: null })
   rebuilt.sort((a, b) => a.min - b.min)
 
   const xml = '<cols>'
-    + rebuilt.map((c) => `<col min="${c.min}" max="${c.max}" width="${c.width}" customWidth="${c.customWidth ?? '1'}"/>`).join('')
+    + rebuilt.map((c) => {
+      const tag = `<col min="${c.min}" max="${c.max}" width="${c.width}" customWidth="${c.customWidth ?? '1'}"/>`
+      if (!c.raw) return tag
+      return c.raw
+        .replace(/\bmin="[^"]*"/, `min="${c.min}"`)
+        .replace(/\bmax="[^"]*"/, `max="${c.max}"`)
+    }).join('')
     + '</cols>'
 
   let updated = container ? sheetXml.replace(container.outerXml, xml) : sheetXml
@@ -356,9 +470,9 @@ export function getColumnWidths(sheetXml) {
   const container = extractElements(sheetXml, 'cols')[0]
   if (!container) return []
   return extractElements(container.outerXml, 'col').map((c) => ({
-    min: Number(getAttribute(c.outerXml, 'min')),
-    max: Number(getAttribute(c.outerXml, 'max')),
-    width: Number(getAttribute(c.outerXml, 'width'))
+    min: Number(attr(c.outerXml, 'min')),
+    max: Number(attr(c.outerXml, 'max')),
+    width: Number(attr(c.outerXml, 'width'))
   }))
 }
 
@@ -375,7 +489,7 @@ export function setRowHeight(sheetXml, rowNumber, height) {
   }
   const parsed = parseRows(sheetXml)
   const existing = parsed.rows.get(rowNumber)
-  const attrs = rowAttributes(existing)
+  const attrs = rowAttributes(existing, { dropHeight: true })
   const cells = existing ? parseRowCells(existing) : new Map()
   parsed.rows.set(rowNumber, `<row r="${rowNumber}"${attrs} ht="${height}" customHeight="1">${[...cells.keys()].sort((a, b) => a - b).map((c) => cells.get(c)).join('')}</row>`)
   return replaceSheetData(sheetXml, renderRows(parsed))
@@ -386,7 +500,7 @@ export function getRowHeights(sheetXml) {
   const parsed = parseRows(sheetXml)
   const out = {}
   for (const [num, xml] of parsed.rows) {
-    const ht = getAttribute(xml, 'ht')
+    const ht = attr(xml, 'ht')
     if (ht !== null && ht !== undefined) out[num] = Number(ht)
   }
   return out

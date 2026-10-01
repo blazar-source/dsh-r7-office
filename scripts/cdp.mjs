@@ -39,16 +39,31 @@ export async function waitForCdp(port, timeoutMs = 30000) {
   throw new Error(`CDP endpoint on port ${port} never became available: ${lastError?.message}`)
 }
 
-/** Wait for a target whose URL matches a predicate. */
+/**
+ * Wait for a target whose URL matches a predicate.
+ *
+ * A CEF application can take a while to open its window and its DevTools
+ * endpoint can be refused in the meantime, so transport failures are treated
+ * as "not ready yet" rather than as a fatal error. Throwing on the first
+ * ECONNREFUSED makes the wait useless exactly when it is needed.
+ */
 export async function waitForTarget(port, predicate, timeoutMs = 60000) {
   const deadline = Date.now() + timeoutMs
+  let lastError = null
   while (Date.now() < deadline) {
-    const targets = await listTargets(port)
-    const match = targets.find(predicate)
-    if (match) return match
+    try {
+      const targets = await listTargets(port)
+      const match = targets.find(predicate)
+      if (match) return match
+    } catch (err) {
+      lastError = err
+    }
     await delay(500)
   }
-  throw new Error('no matching CDP target appeared before the timeout')
+  throw new Error(
+    'no matching CDP target appeared before the timeout'
+    + (lastError ? ` (last transport error: ${lastError.message})` : '')
+  )
 }
 
 export function delay(ms) {

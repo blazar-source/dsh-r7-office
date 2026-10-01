@@ -31,25 +31,33 @@ export function buildR7Tools(options = {}) {
   return [
     {
       name: 'r7_inspect',
-      description: 'Inspect structure, outline, metadata, tables, sheets, and slides of an office document (DOCX, XLSX, PPTX).',
+      description: 'Inspect document structure: outline, metadata, headings, tables, sheet list, slide list, sections, headers/footers, images and hyperlinks.',
       parameters: {
         type: 'object',
         required: ['filePath'],
         properties: {
-          filePath: { type: 'string', description: 'Path to the document file (DOCX, XLSX, PPTX).' }
+          filePath: { type: 'string', description: 'Path to the document file (DOCX, XLSX, PPTX).' },
+          includeStyles: { type: 'boolean', description: 'DOCX: also report the style definitions in use.' },
+          includeSections: { type: 'boolean', description: 'DOCX: also report page size, orientation, margins and section breaks.' },
+          includeHeadersFooters: { type: 'boolean', description: 'DOCX: also report header and footer parts.' },
+          includeHyperlinks: { type: 'boolean', description: 'DOCX: also report hyperlinks and their targets.' },
+          includeImages: { type: 'boolean', description: 'DOCX: also report embedded images.' },
+          includeLists: { type: 'boolean', description: 'DOCX: also report numbering definitions.' }
         }
       },
       output: defaultOutput(),
-      async execute({ filePath }) {
-        const engine = getEngineByExt(filePath)
-        if (!engine) throw new Error(`Unsupported document extension: ${path.extname(filePath)}`)
-        return await engine.inspect(filePath)
+      async execute(args) {
+        const engine = getEngineByExt(args.filePath)
+        if (!engine) throw new Error(`Unsupported document extension: ${path.extname(args.filePath)}`)
+        // Forward every option: the DOCX engine's extra reporting is opt-in, so
+        // dropping the arguments here would silently hide it from an agent.
+        return await engine.inspect(args.filePath, args)
       }
     },
 
     {
       name: 'r7_read',
-      description: 'Read structured text, filtered paragraphs, markdown preview, spreadsheet ranges, or slide contents.',
+      description: 'Read structured text, filtered paragraphs, markdown preview, spreadsheet ranges or slides, optionally with normalized formatting.',
       parameters: {
         type: 'object',
         required: ['filePath'],
@@ -59,6 +67,11 @@ export function buildR7Tools(options = {}) {
           fromParagraph: { type: 'integer', description: '0-based starting paragraph index for DOCX.' },
           count: { type: 'integer', description: 'Max paragraphs to return for DOCX.' },
           query: { type: 'string', description: 'Filter text by substring.' },
+          includeStyles: {
+            type: 'boolean',
+            description: 'Return normalized formatting instead of raw OOXML. DOCX: a "formatting" block per paragraph (style, font family/size, bold, italic, underline, colour, alignment, indents, spacing before/after, line spacing, list/numbering). XLSX: a "styles" matrix plus merged ranges, row heights and column widths. Read this before changing a document.'
+          },
+          includeFormulas: { type: 'boolean', description: 'XLSX: also return the formulas matrix.' },
           sheetIndex: { type: 'integer', description: '0-based sheet index for XLSX.' },
           sheetName: { type: 'string', description: 'Sheet name for XLSX.' },
           range: { type: 'string', description: 'Cell range for XLSX (e.g. A1:D10).' },

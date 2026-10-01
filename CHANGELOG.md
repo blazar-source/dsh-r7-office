@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -12,11 +12,16 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 ### Added
 
 **Tools and runtime**
-- 18 MCP tools: `r7_inspect`, `r7_read`, `r7_create`, `r7_edit`, `r7_replace`,
-  `r7_insert`, `r7_table`, `r7_sheet_read`, `r7_sheet_write`, `r7_sheet_add`,
-  `r7_sheet_formula`, `r7_slide_create`, `r7_slide_edit`, `r7_convert`,
-  `r7_validate`, `r7_desktop_status`, `r7_desktop_selection`,
-  `r7_desktop_exec`.
+- 27 MCP tools.
+  - Shared: `r7_inspect`, `r7_read`, `r7_create`, `r7_convert`, `r7_validate`.
+  - DOCX: `r7_edit`, `r7_replace`, `r7_insert`, `r7_table`,
+    `r7_docx_formatting`, `r7_docx_sections`, `r7_docx_header_footer`,
+    `r7_docx_image`, `r7_docx_hyperlink`.
+  - XLSX: `r7_sheet_read`, `r7_sheet_write`, `r7_sheet_format`,
+    `r7_sheet_add`, `r7_sheet_formula`.
+  - PPTX: `r7_slide_read`, `r7_slide_create`, `r7_slide_format`,
+    `r7_slide_edit`, `r7_slide_object`.
+  - Desktop: `r7_desktop_status`, `r7_desktop_selection`, `r7_desktop_exec`.
 - DeepSeek Harness plugin registering the tools on `ctx.tools` plus an agent
   guidance section on `systemPrompt`.
 - Standalone MCP server over stdio JSON-RPC 2.0 (`src/mcp/cli.js`).
@@ -25,6 +30,51 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 - PDF/HTML/TXT conversion through the local R7 `x2t` engine.
 - Live R7-Office Desktop bridge over a loopback WebSocket: read the selection,
   modify and save the document the user has open.
+
+**DOCX**
+- `r7_docx_formatting` and `r7_read({includeStyles})` return normalized
+  paragraph, run and cell formatting: style, font family/size/color, bold,
+  italic, underline, alignment, indents, spacing before/after, line spacing,
+  list/numbering.
+- Page and section handling: page size, orientation, margins, columns, page
+  breaks and section breaks, read and written property-by-property so unnamed
+  settings survive. Both `<w:sectPr>` forms are handled.
+- Headers and footers: list, read, create and retitle. Page-number fields
+  survive in both the `w:fldSimple` and the complex `fldChar`/`instrText` form.
+- Images: insert PNG/JPEG/GIF with a size, keeping the aspect ratio, creating
+  the media part, the relationship and the content-type default.
+- Tables: merge/unmerge (horizontal and vertical), column widths, cell
+  shading, borders, alignment, vertical alignment, add/remove row and column.
+- Hyperlinks: list, insert, retitle and remove, reusing an existing
+  relationship for a repeated target.
+- Richer `create`/`insert`/`editParagraph` accepting per-paragraph and per-run
+  formatting, lists and page breaks.
+
+**XLSX**
+- `r7_sheet_format`: font, fill, borders, alignment, wrap, number formats
+  (integer, decimal, currency, percent, date, datetime, custom), merge,
+  column width and row height, on a cell or a range.
+- A stylesheet model that parses the workbook's own `xl/styles.xml` and only
+  ever appends: existing font/fill/border/numFmt/cellXf indices are kept, so
+  no cell is repainted. An untouched stylesheet is returned byte-identically.
+- Real dates: `date: true` stores an Excel serial with a date number format
+  instead of text; numbers stay numbers under currency and percent formats.
+- `r7_sheet_read({includeStyles})` returns a normalized style matrix plus
+  merged ranges, row heights and column widths.
+
+**PPTX**
+- `r7_slide_read` returns a normalized slide model: every object's id, type,
+  geometry, rotation and z-order, text, font, fill, stroke, alignment and
+  paragraphs, with layout and master inheritance resolved.
+- Slide operations: add on an existing layout, duplicate, move, reorder and
+  delete. Slides are addressed by their position in the deck through
+  `ppt/presentation.xml.rels`, so a deletion cannot silently shift the target.
+- Objects: shapes (rectangle, rounded rectangle, ellipse, line, arrow, and
+  more), text boxes and images, each with geometry, fill, transparency, border
+  and text in one call; removal and image replacement.
+- Object formatting: font, geometry, fill, border, alignment, bullet and
+  numbered lists, line and paragraph spacing, applied as a patch so unnamed
+  properties keep whatever the author set.
 
 **Engines**
 - Dependency-free ZIP reader/writer built on `node:zlib`, including CRC-32.
@@ -39,8 +89,8 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
   mode through `r7_desktop_status`.
 
 **Testing and tooling**
-- 155 tests across 28 suites: unit, OOXML regression, file end-to-end, desktop
-  bridge and external MCP client.
+- 369 tests: unit, OOXML regression, file end-to-end, desktop bridge, external
+  MCP client, and per-format acceptance coverage.
 - `scripts/live-desktop-e2e.mjs` — 19-check live run against a real R7-Office
   Desktop driven through the CEF DevTools protocol.
 - `scripts/harness-smoke.mjs` — boots a fresh DeepSeek Harness and asserts the
@@ -48,6 +98,9 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 - `scripts/clean-install-check.mjs` — clones the repository into an empty
   directory, installs, runs the suite and inspects `npm pack` output.
 - `scripts/cdp.mjs` — dependency-free Chrome DevTools Protocol client.
+- `examples/xlsx-acceptance.js`, `examples/pptx-acceptance.js` and
+  `examples/docx-acceptance.js` build the three acceptance documents used for
+  the visual sign-off.
 
 **Documentation**
 - English and Russian READMEs with clean-install instructions.

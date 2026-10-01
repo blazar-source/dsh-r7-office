@@ -44,6 +44,33 @@ export const BORDER_STYLES = new Set([
   'mediumDashDotDot', 'slantDashDot'
 ])
 
+/**
+ * Format codes that a built-in number-format id already spells out exactly.
+ *
+ * A code that matches one of these needs no `numFmts` declaration: allocating a
+ * private id for `0` or `0.00` would grow every stylesheet with entries that
+ * every spreadsheet already knows by number.
+ */
+const BUILTIN_CODE_TO_ID = new Map([
+  ['0', BUILTIN_NUMFMT.integer],
+  ['0.00', BUILTIN_NUMFMT.decimal],
+  ['#,##0', BUILTIN_NUMFMT.thousands],
+  ['#,##0.00', BUILTIN_NUMFMT.thousandsDecimal],
+  ['0%', BUILTIN_NUMFMT.percent],
+  ['0.00%', BUILTIN_NUMFMT.percentDecimal],
+  ['@', BUILTIN_NUMFMT.text]
+])
+
+/**
+ * The literal format code behind a built-in id, for the ids that have exactly
+ * one. Ids 14/21/22 (and every locale-dependent id) are deliberately absent:
+ * their code is a property of the locale, not of the id.
+ */
+const BUILTIN_ID_TO_CODE = new Map(
+  [...BUILTIN_CODE_TO_ID].map(([code, id]) => [id, code])
+)
+BUILTIN_ID_TO_CODE.set(BUILTIN_NUMFMT.general, 'General')
+
 /** A border edge width in 1/8 pt, used to express a requested thickness. */
 export const BORDER_WIDTH_TO_STYLE = new Map([
   [1, 'thin'],
@@ -161,10 +188,28 @@ export function resolveNumberFormat(spec = {}) {
   }
 }
 
-/** Compare two plain objects by their JSON shape, ignoring key order. */
+/**
+ * Key-order-insensitive deep copy of a plain value, used for shape comparison.
+ *
+ * The obvious implementation — `JSON.stringify(value, Object.keys(value).sort())`
+ * — is wrong: a replacer *array* filters every nested object too, so two borders
+ * or two alignments serialize to the same `{}` and compare equal whatever they
+ * contain. That silently reused one format for cells that asked for different
+ * borders or different alignments.
+ */
+function normalizeShape(value) {
+  if (Array.isArray(value)) return value.map(normalizeShape)
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const key of Object.keys(value).sort()) out[key] = normalizeShape(value[key])
+    return out
+  }
+  return value
+}
+
+/** Compare two plain objects by their deep JSON shape, ignoring key order. */
 function sameShape(a, b) {
-  const norm = (o) => JSON.stringify(o, Object.keys(o || {}).sort())
-  return norm(a) === norm(b)
+  return JSON.stringify(normalizeShape(a)) === JSON.stringify(normalizeShape(b))
 }
 
 /** Read a `<font>` element into a normalized description. */
@@ -543,6 +588,11 @@ export class Stylesheet {
 
   /**
    * Find or append a number format, returning its id.
+   *
+   * Ids are allocated above every id the workbook already uses: R7 numbers its
+   * custom formats from 160 upwards rather than from 164, and reusing one of
+   * those numbers would repaint every cell that already refers to it.
+   *
    * @param {object} spec - resolved format request.
    * @returns {number}
    */
@@ -551,16 +601,20 @@ export class Stylesheet {
     if (builtinId !== null && code === null) return builtinId
     if (code === null) return 0
 
-    // Reuse an existing declaration with the same code, built-in or custom.
-    const existingBuiltin = Object.entries(BUILTIN_NUMFMT).find(([, id]) => id !== undefined
-      && this.numFmts.some((n) => n.id === id && n.code === code))
-    if (existingBuiltin) return existingBuiltin[1]
-
+    // A workbook that already spells the code out keeps its own declaration, so
+    // the id a caller reads back is the one the file already used.
     const declared = this.numFmts.find((n) => n.code === code)
     if (declared) return declared.id
 
-    const used = this.numFmts.map((n) => n.id).filter((n) => n >= FIRST_CUSTOM_NUMFMT_ID)
-    const id = used.length > 0 ? Math.max(...used, FIRST_CUSTOM_NUMFMT_ID - 1) + 1 : FIRST_CUSTOM_NUMFMT_ID
+    // Otherwise a code the built-in table already defines needs no declaration.
+    const builtin = BUILTIN_CODE_TO_ID.get(code)
+    if (builtin !== undefined) return builtin
+
+    const highest = this.numFmts.reduce(
+      (max, n) => (Number.isFinite(n.id) && n.id > max ? n.id : max),
+      FIRST_CUSTOM_NUMFMT_ID - 1
+    )
+    const id = Math.max(highest + 1, FIRST_CUSTOM_NUMFMT_ID)
     this.dirty = true
     this.numFmts.push({ id, code, raw: '' })
     return id
@@ -601,21 +655,18 @@ export class Stylesheet {
 
     let borderId = base.borderId
     if (spec.border) {
-      const mergedEdges = {}
+      // A request that names only one edge must not erase the others: the base
+      // border is the starting point, exactly as it is for the font and fill.
+      const baseBorder = this._borderSpec(this.borders[base.borderId] || {})
+      const mergedEdges = { ...baseBorder }
       for (const edge of ['left', 'right', 'top', 'bottom']) {
-        if (spec.border[edge] !== undefined) mergedEdges[edge] = spec.border[edge]
-        else if (base[edge]) mergedEdges[edge] = base[edge]
-      }
-      // A border spec that only clears edges must still reference a border entry.
-      if (Object.keys(mergedEdges).length > 0) {
-        borderId = this.ensureBorder({ ...spec.border, ...mergedEdges })
-      } else {
-        const current = this.borders[base.borderId]
-        if (current) {
-          const hasEdge = ['left', 'right', 'top', 'bottom'].some((e) => current[e])
-          borderId = hasEdge ? this.ensureBorder({ ...this._borderSpec(current), ...spec.border }) : base.borderId
+        if (spec.border[edge] !== undefined) {
+          if (spec.border[edge]) mergedEdges[edge] = spec.border[edge]
+          else delete mergedEdges[edge]
         }
       }
+      // Any other key (`all`, a colour) is passed through to ensureBorder.
+      borderId = this.ensureBorder({ ...spec.border, ...mergedEdges })
     }
 
     let numFmtId = base.numFmtId
@@ -724,12 +775,31 @@ export class Stylesheet {
     return Object.keys(out).length > 0 ? out : null
   }
 
-  /** The format code for a number-format id, or a named built-in. */
+  /**
+   * The format code for a number-format id, or a named built-in.
+   *
+   * A code the workbook declares is returned verbatim; a built-in id that the
+   * workbook did not declare is reported by its friendly name, because a
+   * built-in's rendering is the engine's choice, not a stored code.
+   */
   describeNumberFormat(id) {
     const declared = this.numFmts.find((n) => n.id === id)
     if (declared) return declared.code
     const known = Object.entries(BUILTIN_NUMFMT).find(([, v]) => v === id)
     return known ? known[0] : `builtin:${id}`
+  }
+
+  /** The literal format code for an id, or null when the id has no fixed code. */
+  describeNumberFormatCode(id) {
+    const declared = this.numFmts.find((n) => n.id === id)
+    if (declared) return declared.code
+    return BUILTIN_ID_TO_CODE.get(id) || null
+  }
+
+  /** The friendly name of a built-in number format, or null for a custom one. */
+  describeNumberFormatName(id) {
+    const known = Object.entries(BUILTIN_NUMFMT).find(([, v]) => v === id)
+    return known ? known[0] : null
   }
 
   /** Fully normalized description of a cell format. */
@@ -743,7 +813,9 @@ export class Stylesheet {
       border: this.describeBorder(xf.borderId),
       alignment: xf.alignment && Object.keys(xf.alignment).length > 0 ? xf.alignment : null,
       numberFormat: this.describeNumberFormat(xf.numFmtId),
-      numberFormatId: xf.numFmtId
+      numberFormatId: xf.numFmtId,
+      numberFormatCode: this.describeNumberFormatCode(xf.numFmtId),
+      numberFormatName: this.describeNumberFormatName(xf.numFmtId)
     }
   }
 
@@ -755,11 +827,13 @@ export class Stylesheet {
 
     const parts = [this.prefix]
 
-    const customNumFmts = this.numFmts.filter((n) => n.id >= FIRST_CUSTOM_NUMFMT_ID)
-    if (customNumFmts.length > 0) {
-      parts.push(this._containerOpen('numFmts', customNumFmts.length))
-      for (const n of customNumFmts) {
-        parts.push(`<numFmt numFmtId="${n.id}" formatCode="${escapeXml(n.code)}"/>`)
+    // Every declaration the workbook made is re-emitted, whatever its id: R7
+    // allocates its custom formats from 160, so filtering by ">= 164" would drop
+    // the formats its own cells refer to and silently unformat the document.
+    if (this.numFmts.length > 0) {
+      parts.push(this._containerOpen('numFmts', this.numFmts.length))
+      for (const n of this.numFmts) {
+        parts.push(n.raw || `<numFmt numFmtId="${n.id}" formatCode="${escapeXml(n.code)}"/>`)
       }
       parts.push('</numFmts>')
     }

@@ -54,19 +54,28 @@
 
 | Tool | Category | Description |
 |---|---|---|
-| `r7_inspect` | Inspection | Returns document hierarchy, metadata, sections, tables, sheets, slides |
-| `r7_read` | Reading | Extracts structured text, paragraphs by index/selector, tables, markdown preview |
+| `r7_inspect` | Inspection | Document hierarchy, metadata, sections, tables, sheet and slide lists, headers/footers, images, hyperlinks |
+| `r7_read` | Reading | Structured text, markdown preview, cell ranges; with `includeStyles` a normalized formatting model instead of raw OOXML |
 | `r7_create` | Generation | Creates fresh DOCX, XLSX, or PPTX documents. Refuses to replace an existing file unless `overwrite` is set; for XLSX every `sheets[]` entry and its name is honoured |
 | `r7_edit` | DOCX Modification | Modifies, replaces, or deletes paragraphs preserving original formatting runs |
-| `r7_replace` | DOCX Text | Finds and replaces text patterns/regex while keeping font, color, bold/italic intact |
+| `r7_replace` | DOCX Text | Finds and replaces text while keeping font, color, bold/italic intact |
 | `r7_insert` | DOCX Insertion | Inserts paragraphs, headings, bullet lists, or page breaks at designated positions |
-| `r7_table` | DOCX Tables | Creates, updates, or inspects tables, row cells, borders and shading |
-| `r7_sheet_read` | XLSX Data | Reads cell values, formulas, types from a sheet or range (e.g. `A1:D10`), addressed by name or index |
-| `r7_sheet_write` | XLSX Data | Writes values, numbers and strings into a sheet or cell range, addressed by name or index |
+| `r7_table` | DOCX Tables | Creates, updates, or inspects tables: cells, merge/unmerge, borders, shading, column widths, row and column add/remove |
+| `r7_docx_formatting` | DOCX Formatting | Normalized formatting of paragraphs, runs and cells: style, font family/size/color, alignment, indents, spacing, line spacing, lists |
+| `r7_docx_sections` | DOCX Structure | Page size, orientation, margins, columns, page breaks and section breaks |
+| `r7_docx_header_footer` | DOCX Structure | Lists, reads and edits headers and footers; page-number fields survive |
+| `r7_docx_image` | DOCX Media | Inserts PNG/JPEG/GIF at a requested size, preserving the aspect ratio |
+| `r7_docx_hyperlink` | DOCX Links | Lists, inserts, retitles and removes hyperlinks and their relationships |
+| `r7_sheet_read` | XLSX Data | Reads values, formulas or normalized formatting from a sheet or range, addressed by name or index |
+| `r7_sheet_write` | XLSX Data | Writes values, real date serials and formulas into a sheet or cell range |
+| `r7_sheet_format` | XLSX Formatting | Formats a cell or range: font, fill, borders, alignment, wrap, number formats, merge, column width, row height |
 | `r7_sheet_add` | XLSX Structure | Adds a worksheet to an existing workbook, registering every required package part; existing sheets are never rewritten |
 | `r7_sheet_formula`| XLSX Math | Inserts or updates a formula in a cell |
-| `r7_slide_create` | PPTX Structure | Creates a deck, or appends a slide to an existing one; the slides already present are not modified |
-| `r7_slide_edit` | PPTX Content | Edits text frames, titles, bullet points, and shape contents on slides |
+| `r7_slide_read` | PPTX Reading | Normalized slide model: object id, type, geometry, rotation, z-order, text, font, fill, stroke, alignment, paragraphs, with layout/master inheritance resolved |
+| `r7_slide_create` | PPTX Structure | Creates a deck, or appends a slide built on one of the deck's own layouts; existing slides are not modified |
+| `r7_slide_format` | PPTX Content | Formats or repositions one object in place: font, geometry, fill, border, alignment, lists, spacing, text |
+| `r7_slide_edit` | PPTX Structure | Duplicates, moves, reorders or deletes slides |
+| `r7_slide_object` | PPTX Content | Adds or removes shapes, text boxes and images |
 | `r7_convert` | Conversion | Converts between DOCX/XLSX/PPTX and PDF/HTML/TXT via R7 `x2t` converter |
 | `r7_validate` | Integrity | Validates document package integrity, XML schema validity, and repair checks |
 | `r7_desktop_status` | Desktop Bridge | Reports the bridge connection and the effective security mode |
@@ -75,18 +84,22 @@
 
 ### 3.1 Where formatting lives
 
-There is no separate `r7_format` tool. Formatting is expressed where it is
-unambiguous and cannot silently corrupt a document:
+Formatting is exposed where it can be read back before it is written, because a
+write without a read is how a document gets repainted:
 
-- paragraph-level formatting through `r7_edit` (`style`) and `r7_insert`
-  (heading level, style),
-- cell and table formatting through `r7_table` and `r7_sheet_write`,
-- text-level formatting is **preserved** by `r7_replace` rather than rewritten,
-  because rewriting runs is exactly how a find-and-replace loses fonts and
-  colours.
+- **DOCX** — `r7_docx_formatting` reads paragraph, run and cell formatting;
+  `r7_edit` and `r7_insert` set paragraph-level style; `r7_table` sets cell
+  shading, borders, alignment and widths. Text-level formatting is *preserved*
+  by `r7_replace` rather than rewritten.
+- **XLSX** — `r7_sheet_read({includeStyles})` reads the normalized model;
+  `r7_sheet_format` writes font, fill, borders, alignment, number formats,
+  merge, column width and row height.
+- **PPTX** — `r7_slide_read` reads every object's geometry and typography with
+  layout inheritance resolved; `r7_slide_format` patches an existing object and
+  `r7_slide_object` adds one.
 
-A dedicated formatting tool was intentionally left out of the first release:
-without a stable style-inspection story it invites destructive writes.
+Every write is a *patch*: only the properties named are changed, and a property
+that is not named keeps whatever the author set.
 
 ## 4. Technical Details of R7 Office Integration
 

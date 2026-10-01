@@ -82,14 +82,19 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
 
   test('advertises exactly the documented tool set', async () => {
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 19)
+    assert.equal(tools.length, 27)
 
     const names = tools.map(t => t.name).sort()
     const expected = [
       'r7_convert', 'r7_create', 'r7_desktop_exec', 'r7_desktop_selection',
-      'r7_desktop_status', 'r7_edit', 'r7_inspect', 'r7_insert', 'r7_read',
-      'r7_replace', 'r7_sheet_add', 'r7_sheet_format', 'r7_sheet_formula',
-      'r7_sheet_read', 'r7_sheet_write', 'r7_slide_create', 'r7_slide_edit',
+      'r7_desktop_status',
+      'r7_docx_formatting', 'r7_docx_header_footer', 'r7_docx_hyperlink',
+      'r7_docx_image', 'r7_docx_sections',
+      'r7_edit', 'r7_inspect', 'r7_insert', 'r7_read', 'r7_replace',
+      'r7_sheet_add', 'r7_sheet_format', 'r7_sheet_formula', 'r7_sheet_read',
+      'r7_sheet_write',
+      'r7_slide_create', 'r7_slide_edit', 'r7_slide_format', 'r7_slide_object',
+      'r7_slide_read',
       'r7_table', 'r7_validate'
     ].sort()
     assert.deepEqual(names, expected)

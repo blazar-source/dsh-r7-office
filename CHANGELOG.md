@@ -12,8 +12,9 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 ### Added
 
 **Tools and runtime**
-- 27 MCP tools.
-  - Shared: `r7_inspect`, `r7_read`, `r7_create`, `r7_convert`, `r7_validate`.
+- 28 MCP tools.
+  - Shared: `r7_inspect`, `r7_read`, `r7_create`, `r7_convert`, `r7_validate`,
+    `r7_pdf_inspect`.
   - DOCX: `r7_edit`, `r7_replace`, `r7_insert`, `r7_table`,
     `r7_docx_formatting`, `r7_docx_sections`, `r7_docx_header_footer`,
     `r7_docx_image`, `r7_docx_hyperlink`.
@@ -88,19 +89,50 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 - Desktop bridge binds to `127.0.0.1` only and reports its effective security
   mode through `r7_desktop_status`.
 
+**Conversion and PDF fidelity**
+- PDF export goes through R7's documented params-XML converter form with the
+  font list R7 generates, instead of the two-argument CLI form, which makes the
+  DOCX/PPTX renderer fall back to a 0-byte `AllFonts.js` stub and emit a page of
+  empty fill operators with no text at all. This was not Cyrillic-specific:
+  Latin text was lost identically, and the pages were blank rather than outlined.
+- A malformed `ToUnicode` count (a `beginbfchar` block declaring the font's full
+  glyph count while only the used subset is serialised) is detected and repaired.
+  The repair is detection-gated, never unconditional, and a correct CMap is left
+  untouched and the file is not rewritten.
+- `r7_convert` **refuses to report success for a PDF with no extractable text**.
+  The error names the cause and the fix (run R7-Office Desktop once so it writes
+  `AllFonts.js`), carries `pdfTextQuality`, and can be overridden with
+  `allowOutlinedPdf: true`. The `R7_ALL_FONTS_JS` environment variable overrides
+  the font list location.
+- `r7_pdf_inspect` reports whether a PDF really contains text: per-font embedded
+  flag and ToUnicode and Cyrillic map counts, text glyphs, empty fill operators
+  and a `text` / `outlined` / `mixed` verdict, with `repair: true` to fix a
+  malformed CMap in place.
+- **XLSX exports every worksheet by default** (`allSheets: true`, in tab order);
+  `sheetName` or `sheetIndex` selects one. Previously a single `x2t` run
+  rendered only the tab `activeTab` marked, so other sheets reached no page.
+- `setPageSetup` writes print layout property-by-property in schema order, always
+  emitting `<pageSetUpPr fitToPage="1"/>` alongside `fitToWidth` — without it
+  `fitToWidth` is inert in every renderer, which is what pushed a table's last
+  column onto a page of its own.
+- `docs/pdf-text-fidelity.md` documents the converter behaviour, the diagnostic
+  signature and the remaining dependency on R7's own font list.
+
 **Testing and tooling**
-- 369 tests: unit, OOXML regression, file end-to-end, desktop bridge, external
+- 445 tests: unit, OOXML regression, file end-to-end, desktop bridge, external
   MCP client, and per-format acceptance coverage.
 - `scripts/live-desktop-e2e.mjs` — 19-check live run against a real R7-Office
   Desktop driven through the CEF DevTools protocol.
 - `scripts/harness-smoke.mjs` — boots a fresh DeepSeek Harness and asserts the
-  plugin reached the tool registry.
+  plugin registered exactly the tools the source declares.
 - `scripts/clean-install-check.mjs` — clones the repository into an empty
   directory, installs, runs the suite and inspects `npm pack` output.
 - `scripts/cdp.mjs` — dependency-free Chrome DevTools Protocol client.
 - `examples/xlsx-acceptance.js`, `examples/pptx-acceptance.js` and
   `examples/docx-acceptance.js` build the three acceptance documents used for
   the visual sign-off.
+- `PptxEngine.validateStructure()` rejects a slide with a duplicate shape id or
+  a duplicated placeholder; `r7_pdf_inspect` covers PDF text fidelity.
 
 **Documentation**
 - English and Russian READMEs with clean-install instructions.

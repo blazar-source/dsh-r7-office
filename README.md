@@ -87,7 +87,7 @@ npm install
 npm test
 ```
 
-`npm test` runs 155 tests: pure unit tests, OOXML round-trip regression tests,
+`npm test` runs 445 tests: pure unit tests, OOXML round-trip regression tests,
 file end-to-end workflows, security-policy tests and an external MCP client
 smoke suite. Tests that need an R7-Office installation **skip themselves** with
 a clear message instead of failing, so a clean machine gets a green run.
@@ -99,7 +99,7 @@ Then verify the integration you actually intend to use:
 npm run test:live
 
 # DeepSeek Harness plugin activation. Boots a fresh Harness and asserts the
-# 27 r7_* tools reached the tool registry.
+# 28 r7_* tools reached the tool registry.
 npm run test:harness -- --profile web
 ```
 

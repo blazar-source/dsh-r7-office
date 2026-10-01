@@ -2,6 +2,7 @@ import { extractElements, getAttribute } from '../shared/xml.js'
 import {
   REL,
   argbToHex,
+  childElement,
   findElement,
   firstElement,
   openingTag,
@@ -333,7 +334,14 @@ function resolveRunStyle(bodyXml, paragraphXml, context) {
   }
 }
 
-/** The colour of a properties element, as a literal or a theme token. */
+/**
+ * The colour of a properties element, as a literal or a theme token.
+ *
+ * `a:srgbClr/@val` is `ST_HexColorRGB` — exactly six hex digits — and opacity
+ * belongs in a child `a:alpha` (thousandths of a percent). Files written before
+ * that was corrected carry an eight-digit `AARRGGBB` in `val` instead, so both
+ * forms are read here; the eight-digit one is a legacy shape, not a valid one.
+ */
 function colourOf(propertiesXml) {
   const fill = firstElement(propertiesXml, 'a:solidFill')
   if (!fill) return null
@@ -341,13 +349,29 @@ function colourOf(propertiesXml) {
   if (srgb) {
     const value = getAttribute(openingTag(srgb), 'val')
     if (!value) return null
-    return { hex: argbToHex(value), token: null, transparency: transparencyFromArgb(value) }
+    const alphaEl = firstElement(srgb, 'a:alpha')
+    const transparency = alphaEl
+      ? 1 - Number(getAttribute(openingTag(alphaEl), 'val') || 100000) / 100000
+      : (value.length === 8 ? transparencyFromArgb(value) : 0)
+    return {
+      hex: argbToHex(value.length === 8 ? value : `FF${value}`),
+      token: null,
+      transparency: Math.round(Math.min(Math.max(transparency, 0), 1) * 1000) / 1000
+    }
   }
   for (const [tag, prefix] of [['a:schemeClr', 'scheme:'], ['a:prstClr', 'preset:'], ['a:sysClr', 'system:']]) {
     const el = firstElement(fill, tag)
     if (el) {
       const value = getAttribute(openingTag(el), 'val')
-      return { hex: null, token: `${prefix}${value}`, transparency: 0 }
+      const alphaEl = firstElement(el, 'a:alpha')
+      const transparency = alphaEl
+        ? 1 - Number(getAttribute(openingTag(alphaEl), 'val') || 100000) / 100000
+        : 0
+      return {
+        hex: null,
+        token: `${prefix}${value}`,
+        transparency: Math.round(Math.min(Math.max(transparency, 0), 1) * 1000) / 1000
+      }
     }
   }
   return null
@@ -914,10 +938,13 @@ function bulletOf(pPr) {
 /** Describe a shape's fill from `<p:spPr>`. */
 function describeFill(spPr) {
   if (!spPr) return { color: null, colorToken: null, transparency: 0, kind: null, inherited: true }
-  if (firstElement(spPr, 'a:noFill')) {
+  // Direct children only: a shape's `<a:ln>` also carries `<a:noFill>` and
+  // `<a:solidFill>`, and a descendant search would report the outline's paint
+  // as the shape's fill.
+  if (childElement(spPr, 'a:noFill')) {
     return { color: null, colorToken: null, transparency: 0, kind: 'none', inherited: false }
   }
-  const solid = firstElement(spPr, 'a:solidFill')
+  const solid = childElement(spPr, 'a:solidFill')
   if (solid) {
     const info = colourOf(solid)
     if (info) {
@@ -930,13 +957,13 @@ function describeFill(spPr) {
       }
     }
   }
-  if (firstElement(spPr, 'a:gradFill')) {
+  if (childElement(spPr, 'a:gradFill')) {
     return { color: null, colorToken: null, transparency: 0, kind: 'gradient', inherited: false }
   }
-  if (firstElement(spPr, 'a:blipFill')) {
+  if (childElement(spPr, 'a:blipFill')) {
     return { color: null, colorToken: null, transparency: 0, kind: 'picture', inherited: false }
   }
-  if (firstElement(spPr, 'a:pattFill')) {
+  if (childElement(spPr, 'a:pattFill')) {
     return { color: null, colorToken: null, transparency: 0, kind: 'pattern', inherited: false }
   }
   return { color: null, colorToken: null, transparency: 0, kind: null, inherited: true }
@@ -945,15 +972,15 @@ function describeFill(spPr) {
 /** Describe a shape's stroke from `<p:spPr>`. */
 function describeStroke(spPr) {
   if (!spPr) return { color: null, colorToken: null, width: null, style: null, transparency: 0, none: false }
-  const ln = firstElement(spPr, 'a:ln')
+  const ln = childElement(spPr, 'a:ln')
   if (!ln) return { color: null, colorToken: null, width: null, style: null, transparency: 0, none: false }
   const width = getAttribute(openingTag(ln), 'w')
-  if (firstElement(ln, 'a:noFill')) {
+  if (childElement(ln, 'a:noFill')) {
     return { color: null, colorToken: null, width: width === null ? null : Number(width), style: 'none', transparency: 0, none: true }
   }
-  const solid = firstElement(ln, 'a:solidFill')
+  const solid = childElement(ln, 'a:solidFill')
   const info = solid ? colourOf(solid) : null
-  const dash = firstElement(ln, 'a:prstDash')
+  const dash = childElement(ln, 'a:prstDash')
   return {
     color: info ? info.hex : null,
     colorToken: info ? info.token : null,

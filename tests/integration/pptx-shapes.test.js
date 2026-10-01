@@ -504,5 +504,45 @@ describe('PPTX shapes, paint and images', () => {
     const slide = await engine.readSlide(target, 1)
     assert.equal(slide.slide.objects.filter((o) => o.onSlide && !o.placeholder).length, 5)
   })
+
+  /**
+   * `a:srgbClr/@val` is ST_HexColorRGB: exactly six hex digits. Writing an
+   * eight-digit AARRGGBB there is invalid, and renderers disagree about the
+   * extra byte — LibreOffice draws the colour, while R7's converter read it as
+   * black and painted an opaque black block over the slide. Opacity belongs in
+   * a child a:alpha, in thousandths of a percent.
+   */
+  test('colours are written as six-digit RGB with alpha as a child element', async () => {
+    const target = await blankDeck('colour-validity.pptx')
+    await engine.addShape(target, {
+      slideIndex: 1, shape: 'rectangle', x: 500000, y: 500000, width: 2000000, height: 1000000,
+      fill: { color: '#F3F6FB' }, line: { color: '#D2DAE6', width: 1 }
+    })
+    await engine.addShape(target, {
+      slideIndex: 1, shape: 'rectangle', x: 3000000, y: 500000, width: 2000000, height: 1000000,
+      fill: { color: '#1F6FEB', transparency: 0.4 }, noLine: true
+    })
+
+    const zip = await ZipArchive.fromFile(target)
+    const xml = zip.getText('ppt/slides/slide2.xml')
+
+    const values = [...xml.matchAll(/<a:srgbClr\s+val="([^"]*)"/g)].map((m) => m[1])
+    assert.ok(values.length > 0, 'the slide should carry srgbClr elements')
+    for (const v of values) {
+      assert.match(v, /^[0-9A-Fa-f]{6}$/, `srgbClr val must be exactly 6 hex digits, got "${v}"`)
+    }
+
+    // The translucent fill must express its opacity as a child, not in `val`.
+    assert.match(xml, /<a:srgbClr\s+val="1F6FEB"><a:alpha\s+val="60000"\/><\/a:srgbClr>/,
+      'a 0.4 transparency must be written as <a:alpha val="60000"/> inside a 6-digit srgbClr')
+
+    // And it must read back as the same colour and transparency.
+    const slide = await engine.readSlide(target, 1)
+    const painted = slide.slide.objects.filter((o) => o.onSlide && !o.placeholder)
+    const translucent = painted.find((o) => o.fill && o.fill.transparency > 0.3)
+    assert.ok(translucent, 'the translucent shape should be reported with its transparency')
+    assert.ok(Math.abs(translucent.fill.transparency - 0.4) < 0.01,
+      `expected transparency ~0.4, got ${translucent.fill.transparency}`)
+  })
 })
 

@@ -142,6 +142,35 @@ export function transparencyFromArgb(argb) {
   return Math.round((1 - parseInt(String(argb).slice(0, 2), 16) / 255) * 1000) / 1000
 }
 
+/**
+ * A valid DrawingML colour element.
+ *
+ * `a:srgbClr/@val` is `ST_HexColorRGB`: **exactly six** hex digits. An
+ * `AARRGGBB` value written there is not merely sloppy, it is invalid, and
+ * renderers disagree about what to do with the extra byte — LibreOffice ignores
+ * it and draws the colour, while R7's converter reads the value as a different
+ * colour entirely and painted solid black. Transparency therefore goes in a
+ * child `a:alpha`, whose value is in thousandths of a percent (100000 = opaque).
+ *
+ * @param {string} color - `#RRGGBB`, `RRGGBB` or `AARRGGBB`
+ * @param {number} [transparency] - 0..1 share showing through
+ * @returns {string} e.g. `<a:srgbClr val="F3F6FB"><a:alpha val="50000"/></a:srgbClr>`
+ */
+export function srgbClrElement(color, transparency) {
+  const argb = toArgb(color)
+  const rgb = argb.slice(2)
+  if (transparency === null || transparency === undefined) {
+    return `<a:srgbClr val="${rgb}"/>`
+  }
+  const t = Number(transparency)
+  if (!Number.isFinite(t) || t < 0 || t > 1) {
+    throw new Error(`transparency must be between 0 and 1, got "${transparency}"`)
+  }
+  if (t === 0) return `<a:srgbClr val="${rgb}"/>`
+  const alpha = Math.round((1 - t) * 100000)
+  return `<a:srgbClr val="${rgb}"><a:alpha val="${alpha}"/></a:srgbClr>`
+}
+
 // ------------------------------------------------------------------- XML bits
 
 /** Escape a value used inside a double-quoted XML attribute. */
@@ -195,6 +224,63 @@ export function firstElement(xml, tag) {
 export function firstInner(xml, tag) {
   const el = extractElements(xml, tag)[0]
   return el ? el.innerXml : null
+}
+
+/**
+ * The first **direct** child with the given tag, or null.
+ *
+ * `firstElement` searches every descendant, which is wrong wherever a nested
+ * element of the same name means something else. A shape's `<p:spPr>` holds
+ * both the fill and a `<a:ln>`, and an unfilled border is written as
+ * `<a:ln><a:noFill/></a:ln>` — so a descendant search for `a:noFill` finds the
+ * *line's* noFill and reports the shape's FILL as "none". That silently hid
+ * every colour on any shape with a borderless outline.
+ *
+ * @param {string} containerOuterXml - the container element's own markup
+ * @param {string} tag
+ * @returns {string|null} the child's outer XML
+ */
+export function childElement(containerOuterXml, tag) {
+  if (!containerOuterXml) return null
+  const open = containerOuterXml.indexOf('>')
+  if (open === -1) return null
+  if (containerOuterXml[open - 1] === '/') return null
+  const close = containerOuterXml.lastIndexOf('</')
+  const inner = containerOuterXml.slice(open + 1, close === -1 ? containerOuterXml.length : close)
+
+  const TOKEN = /<(\/?)([A-Za-z_][\w.:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*?)(\/?)>/g
+  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const SAME = new RegExp(`<(/?)${escaped}((?:"[^"]*"|'[^']*'|[^>"'])*?)(/?)>`, 'g')
+
+  let depth = 0
+  let m
+  while ((m = TOKEN.exec(inner)) !== null) {
+    const [, closing, name, , selfClosing] = m
+    if (closing) {
+      depth--
+      continue
+    }
+    if (depth === 0 && name === tag) {
+      if (selfClosing) return m[0]
+      // Walk forward to this element's matching close tag.
+      const rest = inner.slice(m.index + m[0].length)
+      let d = 1
+      let n
+      SAME.lastIndex = 0
+      while ((n = SAME.exec(rest)) !== null) {
+        if (n[3] === '/') continue
+        if (n[1] === '/') {
+          d--
+          if (d === 0) return m[0] + rest.slice(0, n.index + n[0].length)
+        } else {
+          d++
+        }
+      }
+      return m[0]
+    }
+    if (!selfClosing) depth++
+  }
+  return null
 }
 
 /** Attributes of the first opening tag of `tag`, as a plain object. */

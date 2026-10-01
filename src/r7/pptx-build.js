@@ -3,6 +3,7 @@ import {
   toEmu,
   toArgb,
   colorWithTransparency,
+  srgbClrElement,
   xmlAttr,
   withAttribute,
   firstElement,
@@ -292,13 +293,10 @@ export function buildRunProperties(spec = {}) {
   }
 
   if (spec.color !== undefined && spec.color !== null) {
-    const argb = spec.transparency === undefined
-      ? toArgb(spec.color)
-      : colorWithTransparency(spec.color, spec.transparency)
-    children.push(`<a:solidFill><a:srgbClr val="${argb}"/></a:solidFill>`)
+    children.push(`<a:solidFill>${srgbClrElement(spec.color, spec.transparency)}</a:solidFill>`)
   }
   if (spec.highlight) {
-    children.push(`<a:highlight><a:srgbClr val="${toArgb(spec.highlight)}"/></a:highlight>`)
+    children.push(`<a:highlight>${srgbClrElement(spec.highlight)}</a:highlight>`)
   }
   if (spec.family) children.push(`<a:latin typeface="${xmlAttr(spec.family)}"/>`)
   if (spec.complexFamily) children.push(`<a:cs typeface="${xmlAttr(spec.complexFamily)}"/>`)
@@ -551,7 +549,7 @@ function resolveFill(spec) {
   const transparency = descriptor && descriptor.transparency !== undefined
     ? descriptor.transparency
     : spec.fillTransparency
-  return `<a:solidFill><a:srgbClr val="${colorWithTransparency(colour, transparency)}"/></a:solidFill>`
+  return `<a:solidFill>${srgbClrElement(colour, transparency)}</a:solidFill>`
 }
 
 /**
@@ -583,7 +581,7 @@ function resolveLine(spec) {
 
   const children = []
   if (colour) {
-    children.push(`<a:solidFill><a:srgbClr val="${colorWithTransparency(colour, transparency)}"/></a:solidFill>`)
+    children.push(`<a:solidFill>${srgbClrElement(colour, transparency)}</a:solidFill>`)
   }
   if (dash) children.push(`<a:prstDash val="${xmlAttr(dash)}"/>`)
   if (arrows.head) children.push(`<a:headEnd type="${arrows.head}" w="med" len="med"/>`)
@@ -966,16 +964,13 @@ export function mergeRunProperties(rPrXml, font) {
   }
 
   if (font.color !== undefined && font.color !== null) {
-    const argb = font.transparency === undefined
-      ? toArgb(font.color)
-      : colorWithTransparency(font.color, font.transparency)
-    out = setChild(out, 'a:solidFill', `<a:solidFill><a:srgbClr val="${argb}"/></a:solidFill>`, RPR_ORDER)
+    out = setChild(out, 'a:solidFill', `<a:solidFill>${srgbClrElement(font.color, font.transparency)}</a:solidFill>`, RPR_ORDER)
   }
   if (font.solidFillXml) {
     out = setChild(out, 'a:solidFill', font.solidFillXml, RPR_ORDER)
   }
   if (font.highlight) {
-    out = setChild(out, 'a:highlight', `<a:highlight><a:srgbClr val="${toArgb(font.highlight)}"/></a:highlight>`, RPR_ORDER)
+    out = setChild(out, 'a:highlight', `<a:highlight>${srgbClrElement(font.highlight)}</a:highlight>`, RPR_ORDER)
   }
   if (font.family) {
     out = setChild(out, 'a:latin', `<a:latin typeface="${xmlAttr(font.family)}"/>`, RPR_ORDER)

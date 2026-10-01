@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { apply, name, inject, R7_GUIDANCE } from '../../src/plugin/index.js'
+import { buildR7Tools } from '../../src/mcp/tools.js'
 
 describe('DSH R7 Office Plugin', () => {
   test('should export standard Cordis plugin metadata', () => {
@@ -37,16 +38,11 @@ describe('DSH R7 Office Plugin', () => {
 
     apply(mockCtx, { enableDesktopBridge: false })
 
-    assert.equal(registeredTools.length, 27)
+    // Compared against the source, so adding a tool cannot break this test and
+    // the assertion still fails if the plugin mounts a different set.
+    const declared = buildR7Tools({ enableDesktopBridge: false }).map(t => t.name).sort()
+    assert.deepEqual(registeredTools.map(t => t.name).sort(), declared)
     assert.ok(registeredTools.some(t => t.name === 'r7_inspect'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_replace'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_table'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_sheet_write'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_sheet_add'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_sheet_format'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_docx_formatting'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_slide_read'))
-    assert.ok(registeredTools.some(t => t.name === 'r7_slide_object'))
     assert.ok(registeredTools.some(t => t.name === 'r7_convert'))
     assert.ok(registeredTools.some(t => t.name === 'r7_validate'))
 

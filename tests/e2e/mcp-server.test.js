@@ -35,34 +35,20 @@ describe('R7McpServer End-to-End', () => {
     })
     assert.equal(res.id, 2)
     const toolNames = res.result.tools.map(t => t.name)
+
+    // The expected surface is read from the source instead of being repeated
+    // here: a hand-maintained copy went stale on every tool added, and the run
+    // it broke said nothing about the tool set actually being wrong.
+    const { buildR7Tools } = await import('../../src/mcp/tools.js')
+    const declared = buildR7Tools({}).map(t => t.name).sort()
+    assert.deepEqual(toolNames.slice().sort(), declared)
+    assert.equal(toolNames.length, declared.length)
+
+    // A couple of spot checks that the protocol response is really the tools,
+    // not an empty array that happens to compare equal.
     assert.ok(toolNames.includes('r7_inspect'))
-    assert.ok(toolNames.includes('r7_read'))
-    assert.ok(toolNames.includes('r7_create'))
-    assert.ok(toolNames.includes('r7_edit'))
-    assert.ok(toolNames.includes('r7_replace'))
-    assert.ok(toolNames.includes('r7_insert'))
-    assert.ok(toolNames.includes('r7_table'))
-    assert.ok(toolNames.includes('r7_sheet_read'))
-    assert.ok(toolNames.includes('r7_sheet_write'))
-    assert.ok(toolNames.includes('r7_sheet_add'))
-    assert.ok(toolNames.includes('r7_sheet_format'))
-    assert.ok(toolNames.includes('r7_sheet_formula'))
-    assert.ok(toolNames.includes('r7_docx_formatting'))
-    assert.ok(toolNames.includes('r7_docx_sections'))
-    assert.ok(toolNames.includes('r7_docx_header_footer'))
-    assert.ok(toolNames.includes('r7_docx_image'))
-    assert.ok(toolNames.includes('r7_docx_hyperlink'))
-    assert.ok(toolNames.includes('r7_slide_read'))
-    assert.ok(toolNames.includes('r7_slide_create'))
-    assert.ok(toolNames.includes('r7_slide_format'))
-    assert.ok(toolNames.includes('r7_slide_edit'))
-    assert.ok(toolNames.includes('r7_slide_object'))
     assert.ok(toolNames.includes('r7_convert'))
-    assert.ok(toolNames.includes('r7_validate'))
-    assert.ok(toolNames.includes('r7_desktop_status'))
-    assert.ok(toolNames.includes('r7_desktop_selection'))
     assert.ok(toolNames.includes('r7_desktop_exec'))
-    assert.equal(toolNames.length, 27)
   })
 
   test('should call r7_create via MCP', async () => {

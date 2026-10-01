@@ -186,8 +186,9 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node src/mcp/cli.js
 | `r7_slide_format` | Restyle or reposition one existing object in place: font, geometry, fill, border, alignment, lists, spacing, text |
 | `r7_slide_edit` | Duplicate, move, reorder or delete slides |
 | `r7_slide_object` | Add or remove an object: shape, text box or PNG/JPEG image |
-| `r7_convert` | Convert via the R7 `x2t` engine (PDF, HTML, TXT, DOCX, XLSX, PPTX) |
+| `r7_convert` | Convert via the R7 `x2t` engine (PDF, HTML, TXT, DOCX, XLSX, PPTX). PDF conversion uses the font list R7 generates, repairs a malformed ToUnicode count, and **refuses to return a PDF with no extractable text** instead of silently emitting a blank one. XLSX exports every worksheet by default (`allSheets`) |
 | `r7_validate` | Check package integrity and XML health |
+| `r7_pdf_inspect` | Report whether a PDF really contains text or was produced without fonts: per-font embedded flag and ToUnicode/Cyrillic map counts, text glyphs, empty fill operators, and a `text` / `outlined` / `mixed` verdict. `repair: true` fixes a malformed ToUnicode count in place |
 | `r7_desktop_status` | Desktop bridge connection and effective security mode |
 | `r7_desktop_selection` | Read or replace the selection in the open editor |
 | `r7_desktop_exec` | Run a safe editor command, or raw DocScript in developer mode |

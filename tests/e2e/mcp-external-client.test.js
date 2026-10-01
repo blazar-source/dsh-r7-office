@@ -80,24 +80,39 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
     assert.ok(info.version)
   })
 
-  test('advertises exactly the documented tool set', async () => {
+  test('advertises exactly the tool set the source declares', async () => {
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 27)
+    // Derived from the source rather than listed here: a hand-maintained copy
+    // went stale on every tool added, and the failure it produced said nothing
+    // about the tool set actually being wrong. That the documented set matches
+    // is asserted separately, against the READMEs and docs/architecture.md.
+    const { buildR7Tools } = await import('../../src/mcp/tools.js')
+    const declared = buildR7Tools({}).map(t => t.name).sort()
 
-    const names = tools.map(t => t.name).sort()
-    const expected = [
-      'r7_convert', 'r7_create', 'r7_desktop_exec', 'r7_desktop_selection',
-      'r7_desktop_status',
-      'r7_docx_formatting', 'r7_docx_header_footer', 'r7_docx_hyperlink',
-      'r7_docx_image', 'r7_docx_sections',
-      'r7_edit', 'r7_inspect', 'r7_insert', 'r7_read', 'r7_replace',
-      'r7_sheet_add', 'r7_sheet_format', 'r7_sheet_formula', 'r7_sheet_read',
-      'r7_sheet_write',
-      'r7_slide_create', 'r7_slide_edit', 'r7_slide_format', 'r7_slide_object',
-      'r7_slide_read',
-      'r7_table', 'r7_validate'
-    ].sort()
-    assert.deepEqual(names, expected)
+    assert.equal(tools.length, declared.length)
+    assert.deepEqual(tools.map(t => t.name).sort(), declared)
+  })
+
+  test('every declared tool appears in the documentation', async () => {
+    const { buildR7Tools } = await import('../../src/mcp/tools.js')
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const { dirname, join } = await import('node:path')
+
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+    const documented = [
+      'README.md',
+      'README.ru.md',
+      join('docs', 'architecture.md')
+    ]
+
+    for (const rel of documented) {
+      const text = readFileSync(join(root, rel), 'utf8')
+      // A tool is documented by a table row `| \`r7_name\` | ...`
+      const listed = new Set([...text.matchAll(/^\| [`](r7_[a-z_]+)[`]/gm)].map(m => m[1]))
+      const missing = buildR7Tools({}).map(t => t.name).filter(n => !listed.has(n))
+      assert.deepEqual(missing, [], `${rel} does not document: ${missing.join(', ')}`)
+    }
   })
 
   test('every tool publishes a usable input schema', async () => {

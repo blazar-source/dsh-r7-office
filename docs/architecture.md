@@ -76,8 +76,9 @@
 | `r7_slide_format` | PPTX Content | Formats or repositions one object in place: font, geometry, fill, border, alignment, lists, spacing, text |
 | `r7_slide_edit` | PPTX Structure | Duplicates, moves, reorders or deletes slides |
 | `r7_slide_object` | PPTX Content | Adds or removes shapes, text boxes and images |
-| `r7_convert` | Conversion | Converts between DOCX/XLSX/PPTX and PDF/HTML/TXT via R7 `x2t` converter |
+| `r7_convert` | Conversion | Converts between DOCX/XLSX/PPTX and PDF/HTML/TXT via R7 `x2t`; PDF text fidelity is verified and a text-less result is refused |
 | `r7_validate` | Integrity | Validates document package integrity, XML schema validity, and repair checks |
+| `r7_pdf_inspect` | Diagnostics | Reports whether a PDF contains real text or was rendered without fonts: embedded fonts, ToUnicode and Cyrillic map counts, text glyphs, empty fill operators, and a `text`/`outlined`/`mixed` verdict |
 | `r7_desktop_status` | Desktop Bridge | Reports the bridge connection and the effective security mode |
 | `r7_desktop_selection` | Desktop Bridge | Reads or replaces the selected text in the active R7 Desktop editor |
 | `r7_desktop_exec` | Desktop Bridge | Runs an allowlisted safe command, or arbitrary DocScript when developer mode is explicitly enabled |

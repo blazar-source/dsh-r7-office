@@ -3,37 +3,53 @@ import path from 'node:path'
 import { ZipArchive } from '../shared/zip.js'
 import { escapeXml, unescapeXml, extractTextFromXml, extractElements, getAttribute } from '../shared/xml.js'
 import { R7Adapter } from './adapter.js'
+import {
+  Stylesheet,
+  dateToSerial,
+  normalizeArgb,
+  resolveNumberFormat
+} from './xlsx-styles.js'
+import {
+  colToIndex,
+  indexToCol,
+  expandRange,
+  normalizeRange,
+  parseRange,
+  parseRef,
+  buildRef,
+  getCellStyle,
+  setCellStyle,
+  getMergedCells,
+  setMergedCells,
+  getColumnWidths,
+  setColumnWidth,
+  getRowHeights,
+  setRowHeight,
+  estimateColumnWidth
+} from './xlsx-worksheet.js'
 
 /**
- * Helper to convert column letter (A, B, AA) to 0-based index and vice versa.
+ * Column/row reference helpers.
+ *
+ * These delegate to the worksheet module so a single implementation decides how
+ * a reference is parsed; two copies would eventually disagree about `$`
+ * anchors or multi-letter columns.
  */
 export function colLetterToIndex(colStr) {
-  let index = 0
-  for (let i = 0; i < colStr.length; i++) {
-    index = index * 26 + (colStr.charCodeAt(i) - 64)
-  }
-  return index - 1
+  return colToIndex(colStr)
 }
 
 export function indexToColLetter(index) {
-  let colStr = ''
-  let n = index + 1
-  while (n > 0) {
-    let rem = (n - 1) % 26
-    colStr = String.fromCharCode(65 + rem) + colStr
-    n = Math.floor((n - 1) / 26)
-  }
-  return colStr
+  return indexToCol(index)
 }
 
 export function parseCellRef(cellRef) {
-  const match = cellRef.match(/^([A-Za-z]+)([0-9]+)$/)
-  if (!match) throw new Error(`Invalid cell reference: ${cellRef}`)
+  const parsed = parseRef(cellRef)
   return {
-    colStr: match[1].toUpperCase(),
-    col: colLetterToIndex(match[1].toUpperCase()),
-    row: parseInt(match[2], 10) - 1,
-    rowNum: parseInt(match[2], 10)
+    colStr: parsed.colLetters,
+    col: parsed.col,
+    row: parsed.row,
+    rowNum: parsed.row + 1
   }
 }
 
@@ -168,7 +184,13 @@ export class XlsxEngine {
    * @returns {Promise<object>}
    */
   async read(filePath, options = {}) {
-    const { sheetIndex, sheetName = null, range = null, includeFormulas = false } = options
+    const {
+      sheetIndex,
+      sheetName = null,
+      range = null,
+      includeFormulas = false,
+      includeStyles = false
+    } = options
     const zip = await ZipArchive.fromFile(filePath)
 
     // Load shared strings
@@ -177,6 +199,7 @@ export class XlsxEngine {
     const targetSheetPath = this._resolveSheetPath(zip, { sheetIndex, sheetName })
 
     const sheetXml = zip.getText(targetSheetPath)
+    const styles = includeStyles ? this._loadStyles(zip) : null
     const rows = extractElements(sheetXml, 'row')
     const grid = {}
     let minRow = Infinity, maxRow = -1, minCol = Infinity, maxCol = -1
@@ -228,7 +251,10 @@ export class XlsxEngine {
         grid[row][col] = {
           ref: cellRef,
           value: val,
-          formula
+          formula,
+          xfIndex: getAttribute(cXml, 's') === null || getAttribute(cXml, 's') === undefined
+            ? null
+            : Number(getAttribute(cXml, 's'))
         }
       }
     }
@@ -258,28 +284,34 @@ export class XlsxEngine {
 
     const dataMatrix = []
     const formulaMatrix = []
+    const styleMatrix = []
     let formulaCount = 0
 
     for (let r = startRow; r <= endRow; r++) {
       const rowArr = []
       const formulaArr = []
+      const styleArr = []
       for (let c = startCol; c <= endCol; c++) {
         const cellObj = grid[r]?.[c]
         rowArr.push(cellObj ? cellObj.value : '')
         formulaArr.push(cellObj?.formula ?? null)
+        styleArr.push(styles ? styles.describeCellXf(cellObj?.xfIndex ?? 0) : null)
         if (cellObj?.formula) formulaCount++
       }
       dataMatrix.push(rowArr)
       formulaMatrix.push(formulaArr)
+      styleMatrix.push(styleArr)
     }
 
     const result = {
       sheet: targetSheetPath,
+      sheetName: options.sheetName || undefined,
       range: range || `${indexToColLetter(startCol)}${startRow + 1}:${indexToColLetter(endCol)}${endRow + 1}`,
       rowCount: dataMatrix.length,
       colCount: dataMatrix[0]?.length || 0,
       data: dataMatrix
     }
+    if (result.sheetName === undefined) delete result.sheetName
 
     // A formula cell only carries a cached <v> when a spreadsheet engine has
     // already calculated it. Exposing the formulas (and saying whether the
@@ -291,6 +323,24 @@ export class XlsxEngine {
       if (formulaCount > 0) {
         result.note = 'Formula cells are stored as written. Cached values are present only once a '
           + 'spreadsheet engine (for example R7-Office) has opened and recalculated the workbook.'
+      }
+    }
+
+    // The style of every cell in the returned range, so a caller can see the
+    // current formatting before deciding how to change it. Merged ranges, row
+    // heights and column widths are sheet-level facts, reported once.
+    if (includeStyles) {
+      result.styles = styleMatrix
+      result.merged = getMergedCells(sheetXml)
+      result.rowHeights = getRowHeights(sheetXml)
+      result.columnWidths = getColumnWidths(sheetXml)
+      result.styleVocabulary = {
+        note: 'Every value below is normalized; no raw OOXML is required to change it.',
+        fontKeys: ['family', 'size', 'bold', 'italic', 'underline', 'strike', 'color'],
+        fillKeys: ['color', 'patternType'],
+        borderKeys: ['left', 'right', 'top', 'bottom'],
+        alignmentKeys: ['horizontal', 'vertical', 'wrapText'],
+        numberFormatExamples: ['integer', 'decimal', 'currency', 'percent', 'date', 'datetime', 'custom']
       }
     }
 

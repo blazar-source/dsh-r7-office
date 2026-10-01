@@ -45,6 +45,7 @@ describe('R7McpServer End-to-End', () => {
     assert.ok(toolNames.includes('r7_sheet_read'))
     assert.ok(toolNames.includes('r7_sheet_write'))
     assert.ok(toolNames.includes('r7_sheet_add'))
+    assert.ok(toolNames.includes('r7_sheet_format'))
     assert.ok(toolNames.includes('r7_sheet_formula'))
     assert.ok(toolNames.includes('r7_slide_create'))
     assert.ok(toolNames.includes('r7_slide_edit'))
@@ -53,7 +54,7 @@ describe('R7McpServer End-to-End', () => {
     assert.ok(toolNames.includes('r7_desktop_status'))
     assert.ok(toolNames.includes('r7_desktop_selection'))
     assert.ok(toolNames.includes('r7_desktop_exec'))
-    assert.equal(toolNames.length, 18)
+    assert.equal(toolNames.length, 19)
   })
 
   test('should call r7_create via MCP', async () => {

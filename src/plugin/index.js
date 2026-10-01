@@ -61,7 +61,7 @@ export function apply(ctx, config = {}) {
   const mount = () => {
     const disposers = tools.map((tool) => ctx.tools.register(tool))
 
-    if (announce && prompt !== undefined && typeof prompt.section === 'function') {
+    if (announce && prompt != null && typeof prompt.section === 'function') {
       disposers.push(
         prompt.section({
           name: 'plugin:dsh-r7-office',

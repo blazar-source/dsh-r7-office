@@ -109,10 +109,10 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
       name: 'r7_create',
       arguments: {
         filePath: docPath,
-        title: 'Р’РЅРµС€РЅРёР№ MCP РєР»РёРµРЅС‚',
+        title: 'Внешний MCP клиент',
         paragraphs: [
-          'РџРµСЂРІС‹Р№ Р°Р±Р·Р°С†, СЃРѕР·РґР°РЅРЅС‹Р№ СЃС‚РѕСЂРѕРЅРЅРёРј MCP-РєР»РёРµРЅС‚РѕРј.',
-          'Р’С‚РѕСЂРѕР№ Р°Р±Р·Р°С† РґР»СЏ РїРѕСЃР»РµРґСѓСЋС‰РµР№ Р·Р°РјРµРЅС‹.'
+          'Первый абзац, созданный сторонним MCP-клиентом.',
+          'Второй абзац для последующей замены.'
         ]
       }
     })
@@ -136,8 +136,8 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
       name: 'r7_replace',
       arguments: {
         filePath: docPath,
-        search: 'Р’С‚РѕСЂРѕР№ Р°Р±Р·Р°С† РґР»СЏ РїРѕСЃР»РµРґСѓСЋС‰РµР№ Р·Р°РјРµРЅС‹.',
-        replace: 'РђР±Р·Р°С†, Р·Р°РјРµРЅС‘РЅРЅС‹Р№ РІРЅРµС€РЅРёРј РєР»РёРµРЅС‚РѕРј.'
+        search: 'Второй абзац для последующей замены.',
+        replace: 'Абзац, заменённый внешним клиентом.'
       }
     })
     assert.ok(!res.isError)
@@ -147,7 +147,7 @@ describe('External MCP client smoke test', { skip: sdkAvailable ? false : 'MCP c
       arguments: { filePath: docPath, format: 'markdown' }
     })
     const data = JSON.parse(read.content[0].text)
-    assert.ok(data.content.includes('Р·Р°РјРµРЅС‘РЅРЅС‹Р№ РІРЅРµС€РЅРёРј РєР»РёРµРЅС‚РѕРј'))
+    assert.ok(data.content.includes('заменённый внешним клиентом'))
   })
 
   test('validates through the external client', async () => {

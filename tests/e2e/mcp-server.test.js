@@ -7,8 +7,8 @@ import { R7McpServer } from '../../src/mcp/server.js'
 
 describe('R7McpServer End-to-End', () => {
   const tmpDir = path.join(os.tmpdir(), `dsh_mcp_e2e_${Date.now()}`)
-  const testDocx = path.join(tmpDir, 'РўРµСЃС‚РѕРІС‹Р№_РґРѕРєСѓРјРµРЅС‚.docx')
-  const outPdf = path.join(tmpDir, 'РўРµСЃС‚РѕРІС‹Р№_РґРѕРєСѓРјРµРЅС‚.pdf')
+  const testDocx = path.join(tmpDir, 'Тестовый_документ.docx')
+  const outPdf = path.join(tmpDir, 'Тестовый_документ.pdf')
   let server
 
   test('setup test directory and server', () => {
@@ -65,10 +65,10 @@ describe('R7McpServer End-to-End', () => {
         name: 'r7_create',
         arguments: {
           filePath: testDocx,
-          title: 'Р”РѕРєСѓРјРµРЅС‚ С‡РµСЂРµР· MCP',
+          title: 'Документ через MCP',
           paragraphs: [
-            'РџРµСЂРІС‹Р№ Р°Р±Р·Р°С†, СЃРѕР·РґР°РЅРЅС‹Р№ С‡РµСЂРµР· РІС‹Р·РѕРІ MCP-РёРЅСЃС‚СЂСѓРјРµРЅС‚Р°.',
-            'Р’С‚РѕСЂРѕР№ Р°Р±Р·Р°С† СЃ РёСЃС…РѕРґРЅС‹Рј С‚РµРєСЃС‚РѕРј РґР»СЏ Р·Р°РјРµРЅС‹.'
+            'Первый абзац, созданный через вызов MCP-инструмента.',
+            'Второй абзац с исходным текстом для замены.'
           ]
         }
       }
@@ -104,8 +104,8 @@ describe('R7McpServer End-to-End', () => {
         name: 'r7_replace',
         arguments: {
           filePath: testDocx,
-          search: 'Р’С‚РѕСЂРѕР№ Р°Р±Р·Р°С† СЃ РёСЃС…РѕРґРЅС‹Рј С‚РµРєСЃС‚РѕРј РґР»СЏ Р·Р°РјРµРЅС‹.',
-          replace: 'РћР±РЅРѕРІР»РµРЅРЅС‹Р№ Рё РїСЂРѕРІРµСЂРµРЅРЅС‹Р№ Р°Р±Р·Р°С† С‡РµСЂРµР· MCP.'
+          search: 'Второй абзац с исходным текстом для замены.',
+          replace: 'Обновленный и проверенный абзац через MCP.'
         }
       }
     })
@@ -122,7 +122,7 @@ describe('R7McpServer End-to-End', () => {
       }
     })
     const readData = JSON.parse(readRes.result.content[0].text)
-    assert.ok(readData.content.includes('РћР±РЅРѕРІР»РµРЅРЅС‹Р№ Рё РїСЂРѕРІРµСЂРµРЅРЅС‹Р№ Р°Р±Р·Р°С†'))
+    assert.ok(readData.content.includes('Обновленный и проверенный абзац'))
   })
 
   test('should call r7_validate via MCP', async () => {

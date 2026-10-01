@@ -1,4 +1,4 @@
-﻿/**
+/**
  * DeepSeek Harness integration smoke test.
  *
  * Boots a fresh DeepSeek Harness process for a named profile on an ephemeral
@@ -13,7 +13,7 @@
  * the profile, or the dsh launcher is unavailable).
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import process from 'node:process'
 
 function argValue(flag, fallback) {
@@ -26,7 +26,7 @@ const DSH = argValue('--dsh', process.platform === 'win32' ? 'dsh.cmd' : 'dsh')
 const TIMEOUT_MS = Number(argValue('--timeout', '90')) * 1000
 
 const EXPECTED_TOOL_COUNT = 18
-const ACTIVATION_PATTERN = /\[r7-office\]\s*Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРѕ РёРЅСЃС‚СЂСѓРјРµРЅС‚РѕРІ:\s*(\d+)/u
+const ACTIVATION_PATTERN = /\[r7-office\]\s*зарегистрировано инструментов:\s*(\d+)/u
 const FAILURE_PATTERN = /r7-office.*did not activate|tool "r7_\w+" must declare output/u
 
 console.log(`booting a fresh DeepSeek Harness (profile "${PROFILE}") to verify plugin activation...`)
@@ -48,20 +48,39 @@ const child = spawn(commandLine, {
 let combined = ''
 let settled = false
 
+/**
+ * Terminate the whole process tree.
+ *
+ * The launcher runs under a shell on Windows, so killing the child only kills
+ * the shell: the actual `dsh` node process survives, keeps serving on an
+ * ephemeral port and — because the plugin starts the desktop bridge at mount
+ * time — keeps holding the bridge port. Leaked instances then make the next
+ * run connect to a stale bridge.
+ */
+function killTree() {
+  if (isWindows) {
+    try {
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch { /* already gone */ }
+  }
+  try { child.kill('SIGKILL') } catch { /* already gone */ }
+}
+
 function finish(code, message) {
   if (settled) return
   settled = true
   clearTimeout(timer)
   console.log(message)
-  try { child.kill('SIGKILL') } catch { /* already gone */ }
-  // A detached dsh may leave a node child behind; the port is ephemeral and the
-  // process exits on its own once stdin closes, so no process sweep is needed.
+  killTree()
   console.log(`\nRESULT: ${code === 0 ? 'PASSED' : code === 2 ? 'SKIPPED' : 'FAILED'}`)
-  process.exit(code)
+  // Give the tree kill a moment to reap the grandchildren before exiting.
+  setTimeout(() => process.exit(code), 800)
 }
 
 const timer = setTimeout(() => {
-  finish(1, `timed out after ${TIMEOUT_MS / 1000}s waiting for the activation line`)
+  const tail = combined.trim().split('\n').slice(-25).join('\n')
+  finish(1, `timed out after ${TIMEOUT_MS / 1000}s waiting for the activation line`
+    + (tail ? `\n--- captured output ---\n${tail}` : '\n(no output was captured at all)'))
 }, TIMEOUT_MS)
 
 function onChunk(buf, source) {

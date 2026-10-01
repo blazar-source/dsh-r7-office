@@ -75,17 +75,17 @@ describe('Desktop Bridge E2E', { skip: skipReason }, () => {
       assert.equal(command.action, 'getSelection')
       assert.ok(command.id, 'the command carries a correlation id')
 
-      ws.send(JSON.stringify({ id: command.id, success: true, text: 'РІС‹РґРµР»РµРЅРЅС‹Р№ С„СЂР°РіРјРµРЅС‚' }))
+      ws.send(JSON.stringify({ id: command.id, success: true, text: 'выделенный фрагмент' }))
       const result = await pending
       assert.equal(result.success, true)
-      assert.equal(result.text, 'РІС‹РґРµР»РµРЅРЅС‹Р№ С„СЂР°РіРјРµРЅС‚')
+      assert.equal(result.text, 'выделенный фрагмент')
     })
 
     test('performs a selection replacement over the wire', async () => {
-      const pending = bridge.execute('replaceSelection', { text: 'РЅРѕРІС‹Р№ С‚РµРєСЃС‚' })
+      const pending = bridge.execute('replaceSelection', { text: 'новый текст' })
       const command = await nextMessage(ws)
       assert.equal(command.action, 'replaceSelection')
-      assert.equal(command.payload.text, 'РЅРѕРІС‹Р№ С‚РµРєСЃС‚')
+      assert.equal(command.payload.text, 'новый текст')
 
       ws.send(JSON.stringify({ id: command.id, success: true }))
       const result = await pending
@@ -100,7 +100,7 @@ describe('Desktop Bridge E2E', { skip: skipReason }, () => {
     })
 
     test('allows a safe command through the wire', async () => {
-      const pending = bridge.execute('safeCommand', { command: 'addParagraph', args: { text: 'РђР±Р·Р°С†' } })
+      const pending = bridge.execute('safeCommand', { command: 'addParagraph', args: { text: 'Абзац' } })
       const command = await nextMessage(ws)
       assert.equal(command.action, 'safeCommand')
       assert.equal(command.payload.command, 'addParagraph')

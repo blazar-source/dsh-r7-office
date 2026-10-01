@@ -54,7 +54,7 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 - `docs/architecture.md`, `docs/development.md`, `docs/roadmap.md` and
   ADR [0001](docs/decisions/0001-r7-office-plugin-architecture.md).
 - `SECURITY.md` with the project threat model.
-- Explicit unofficial/community disclaimer: no affiliation with РђРћ В«Р 7В» or
+- Explicit unofficial/community disclaimer: no affiliation with АО «Р7» or
   DeepSeek, and no R7 code or binaries redistributed.
 
 ### Changed

@@ -11,7 +11,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/OWNER/dsh-r7-office.git
+git clone https://github.com/blazar-source/dsh-r7-office.git
 cd dsh-r7-office
 npm install
 npm test

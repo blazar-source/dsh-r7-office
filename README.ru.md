@@ -1,6 +1,6 @@
 # dsh-r7-office (Плагин Р7-Офис для DeepSeek Harness и MCP-сервер)
 
-[![CI](https://github.com/OWNER/dsh-r7-office/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/dsh-r7-office/actions/workflows/ci.yml)
+[![CI](https://github.com/blazar-source/dsh-r7-office/actions/workflows/ci.yml/badge.svg)](https://github.com/blazar-source/dsh-r7-office/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
 
@@ -78,7 +78,7 @@ DeepSeek Harness ──► плагин dsh-r7-office ──┐
 
 ```bash
 # 1. Получить код
-git clone https://github.com/OWNER/dsh-r7-office.git
+git clone https://github.com/blazar-source/dsh-r7-office.git
 cd dsh-r7-office
 
 # 2. Установить опциональные dev-зависимости (только для тестов: MCP SDK клиента)

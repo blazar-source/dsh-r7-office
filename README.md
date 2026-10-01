@@ -1,6 +1,6 @@
 # dsh-r7-office
 
-[![CI](https://github.com/OWNER/dsh-r7-office/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/dsh-r7-office/actions/workflows/ci.yml)
+[![CI](https://github.com/blazar-source/dsh-r7-office/actions/workflows/ci.yml/badge.svg)](https://github.com/blazar-source/dsh-r7-office/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
 
@@ -77,7 +77,7 @@ These steps assume an empty directory and a machine with Node.js 20+.
 
 ```bash
 # 1. Get the code
-git clone https://github.com/OWNER/dsh-r7-office.git
+git clone https://github.com/blazar-source/dsh-r7-office.git
 cd dsh-r7-office
 
 # 2. Install the optional dev dependencies (test-only: the MCP client SDK)
@@ -385,6 +385,20 @@ vulnerability.
 - **DOCX: comments, tracked changes, footnotes, endnotes, a table of contents,
   equations and embedded objects are preserved, never edited.** A test asserts
   they survive an ordinary edit with every part byte-identical.
+- **DOCX to PDF: a thin horizontal line can appear through an italic subtitle.**
+  A paragraph styled `Subtitle` (italic, centred, grey) may render with a faint
+  line across it after `r7_convert`. The document contains no strikethrough,
+  underline or paragraph border — `w:strike`, `w:u` and `w:pBdr` are all absent,
+  and the same style applied to R7's own template renders cleanly through the
+  same converter — so the line is introduced during PDF conversion and cannot
+  be corrected from the document. It is cosmetic: the text itself is correct and
+  extracts normally. Quantified at roughly 5 % more ink in that text band.
+- **PDF rendering is verified visually, not by text extraction.** A PDF can
+  carry the right text, the right page count and a clean `validate()` while
+  drawing the wrong glyphs or a solid block. `scripts/visual-acceptance.py`
+  renders the output with two independent engines and compares against a
+  LibreOffice render of the source; run it when changing anything in the
+  conversion path.
 - **XLSX: not implemented in v0.1.0.** Cell styles are limited to the
   properties listed for `r7_sheet_format`; conditional formatting, data
   validation, charts, pivot tables and defined names are preserved but not

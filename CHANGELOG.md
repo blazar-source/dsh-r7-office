@@ -228,5 +228,5 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
   Desktop is optional and needed only for conversion and the desktop bridge.
 - The automated live desktop test is verified on Windows only.
 
-[0.1.0]: https://github.com/OWNER/dsh-r7-office/releases/tag/v0.1.0
+[0.1.0]: https://github.com/blazar-source/dsh-r7-office/releases/tag/v0.1.0
 

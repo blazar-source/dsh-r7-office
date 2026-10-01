@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Clean-install verification.
  *
  * Reproduces exactly what a new user gets: clone the committed repository into
@@ -15,7 +15,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -76,6 +76,11 @@ try {
   if (install.code !== 0) throw new Error('install failed')
 
   // 5. The MCP server must answer a raw JSON-RPC call with no test harness.
+  //
+  // The expected surface is taken from the clone's own tool builder instead of
+  // a hardcoded number, so this check compares the spawned stdio server against
+  // the in-process builder — a real integration property — rather than going
+  // stale every time a tool is added.
   const direct = await new Promise((resolve) => {
     const child = spawn(process.execPath, ['src/mcp/cli.js'], {
       cwd: cloneDir,
@@ -87,12 +92,26 @@ try {
     child.stdin.end()
     child.on('exit', () => resolve(out))
   })
-  let toolCount = 0
+
+  let servedNames = []
   try {
-    toolCount = JSON.parse(direct.trim()).result.tools.length
+    servedNames = JSON.parse(direct.trim()).result.tools.map((t) => t.name).sort()
   } catch { /* fall through to the assertion below */ }
-  record('the MCP server answers tools/list in the clean clone', toolCount === 18,
-    `${toolCount} tools`)
+
+  let builtNames = []
+  try {
+    const { buildR7Tools } = await import(pathToFileURL(path.join(cloneDir, 'src', 'mcp', 'tools.js')).href)
+    builtNames = buildR7Tools({}).map((t) => t.name).sort()
+  } catch (err) {
+    builtNames = [`<import failed: ${err.message}>`]
+  }
+
+  const sameSurface = servedNames.length > 0
+    && servedNames.length === builtNames.length
+    && servedNames.every((name, i) => name === builtNames[i])
+  record('the spawned MCP server advertises the same tools as the builder',
+    sameSurface,
+    `${servedNames.length} served / ${builtNames.length} built`)
 
   // 6. The full suite, in the clone.
   if (skipTests) {

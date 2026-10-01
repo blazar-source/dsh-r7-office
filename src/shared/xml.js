@@ -118,13 +118,26 @@ export function extractElements(xml, tagName) {
 }
 
 /**
- * Extract attribute value from an XML opening tag.
+ * Extract an attribute value from an XML opening tag.
+ *
+ * The attribute name is anchored at an XML name boundary. Without that anchor
+ * a substring match returns the wrong value whenever one attribute name ends
+ * with another: R7 writes `<col customWidth="1" min="1" max="1" width="14"/>`,
+ * so an unanchored lookup of `width` yields "1" (from `customWidth`) and a
+ * lookup of `ht` yields "1" (from `customHeight`). Silent wrong values like
+ * that corrupt documents, which is why the boundary is enforced here rather
+ * than in each caller.
+ *
  * @param {string} tagXml
- * @param {string} attrName
+ * @param {string} attrName - e.g. "r", "w:val", "customWidth"
  * @returns {string|null}
  */
 export function getAttribute(tagXml, attrName) {
-  const regex = new RegExp(`${attrName}=["']([^"']*)["']`, 'i')
+  if (!tagXml || !attrName) return null
+  const escaped = attrName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // A preceding character may be the start of the string, whitespace, or the
+  // opening angle bracket; anything else would make this part of a longer name.
+  const regex = new RegExp(`(?:^|[\\s<])${escaped}\\s*=\\s*["']([^"']*)["']`)
   const match = tagXml.match(regex)
   return match ? match[1] : null
 }

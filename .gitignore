@@ -25,6 +25,9 @@ npm-debug.log*
 temp/
 test_output/
 .scratch/
+# Scratch scripts written into the repository root during a session. They are
+# never part of the project and must not reach a commit.
+.tmp-*
 
 # Generated office documents.
 #

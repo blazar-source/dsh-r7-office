@@ -99,6 +99,25 @@ async function belowPlaceholders(slideIndex, types, extra = 0) {
   return (bottoms.length > 0 ? Math.max(...bottoms) : 0) + GAP + extra
 }
 
+/**
+ * The last `y` content may reach on a slide.
+ *
+ * The date, footer and slide-number placeholders are inherited from the layout
+ * and sit in a band across the bottom of every slide. A box that ends below
+ * their top edge does not visibly collide while those fields are empty, but it
+ * does the moment a date or footer is switched on, so content is bounded by the
+ * band rather than by the slide edge.
+ */
+async function contentBottom(slideIndex) {
+  const size = await canvasSize()
+  const read = await pptx.readSlide(deckPath, slideIndex)
+  const band = read.slide.objects
+    .filter((o) => o.placeholder && ['dt', 'ftr', 'sldNum'].includes(o.placeholder.type))
+    .map((o) => o.y)
+    .filter((y) => y !== null && y !== undefined)
+  return band.length > 0 ? Math.min(...band) : size.height
+}
+
 // ------------------------------------------------------- 1. title slide
 
 console.log('1. Титульный слайд')
@@ -336,12 +355,14 @@ console.log('6. Изображение с подписью')
   })
 
   // The picture and its caption are fitted into the space that is actually
-  // left below the title, measured from the slide, so neither can reach into
-  // the title's box or past the bottom of the slide.
+  // left below the title and above the inherited date/footer band, measured
+  // from the slide, so neither can reach into the title's box, into the footer
+  // band, or past the bottom of the slide.
   const size = await canvasSize()
   const top = await belowPlaceholders(5, 'title')
+  const bottom = await contentBottom(5)
   const captionHeight = 1.4 * EMU_CM
-  const available = size.height - top - captionHeight - GAP
+  const available = bottom - top - captionHeight - GAP
   const ratio = chartWidth / chartHeight
   const imageWidth = Math.min(24 * EMU_CM, Math.floor(available * ratio))
   const imageHeight = Math.round(imageWidth / ratio)

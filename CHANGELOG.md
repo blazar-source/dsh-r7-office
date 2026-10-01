@@ -118,6 +118,52 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 - `docs/pdf-text-fidelity.md` documents the converter behaviour, the diagnostic
   signature and the remaining dependency on R7's own font list.
 
+**Glyph correctness — found by visual acceptance, not by any textual check**
+- **PPTX colours were written as invalid DrawingML.** `a:srgbClr/@val` is
+  `ST_HexColorRGB` — exactly six hex digits — and the builder wrote an
+  eight-digit `AARRGGBB`, putting opacity in the value instead of a child
+  `a:alpha`. LibreOffice ignores the extra byte and draws the colour; R7's
+  converter read it as black, so a slide's backdrop panel and its KPI cards
+  collapsed into one opaque black block. Every fill, stroke, font colour and
+  highlight now goes through `srgbClrElement`, emitting six digits plus
+  `<a:alpha val="N"/>` in thousandths of a percent. Files written before this
+  are still read correctly.
+- **A shape's fill was read from its outline.** `describeFill` searched every
+  descendant of `<p:spPr>` for `a:noFill`, and `<a:ln>` carries one for a
+  borderless outline — so any shape with an unfilled border reported its fill as
+  "none" and lost its colour and transparency. Fills and strokes are now read
+  from direct children only, via the new `childElement` helper.
+- **DOCX Cyrillic rendered as the wrong glyphs.** The document asks for
+  "Liberation Sans"; `x2t` took the glyph id from that metric-compatible
+  substitute's cmap but embedded the real font (Arial) and took its widths, so
+  every character whose index differs between the two was drawn from the wrong
+  slot — 114 of 157 checked CIDs. The text layer was perfect, which is why a
+  text-extraction verdict passed while the page was unreadable. `x2t` is now
+  handed a font list whose substitute entries resolve to the real font file
+  (`src/r7/font-substitutes.js`); metric-compatible pairs, so layout is
+  untouched, and entries whose real font is absent are left alone.
+- `inspectPdf(input, { fontPaths })` now verifies the glyph chain
+  (content code → CID → CIDToGIDMap → outline versus
+  content code → CID → ToUnicode → source cmap → outline) and reports
+  `glyphChainChecked`, `glyphChainMismatches`, `glyphMapInconsistent`. Fonts it
+  cannot identify are reported as *unverifiable*, never as correct.
+  `r7_convert` refuses a PDF it can prove draws the wrong glyphs
+  (`allowGlyphMismatchPdf: true` overrides).
+- `src/r7/sfnt.js` — a minimal TrueType reader (tables, name, cmap formats
+  0/4/6/12, advances, outlines) used to identify a font and fingerprint a glyph,
+  with no dependency on a renderer, R7, or a system font.
+
+**Visual acceptance gate**
+- `scripts/visual-acceptance.py` renders the produced PDF with **two
+  independent engines** (MuPDF and PDFium) and compares every page against a
+  trusted render of the source file made by LibreOffice. It separates two
+  questions that mean different things: engines disagreeing about the same PDF
+  is corruption, while a difference from the reference is drift, and the
+  reference has its own engine noise (2.38 % between MuPDF and PDFium on page 1
+  of the LibreOffice output alone), so the fidelity threshold is relative to
+  that noise rather than absolute. The defects above passed every textual check
+  — page count, text layer, `validate()` — and were caught only here.
+
 **Testing and tooling**
 - 445 tests: unit, OOXML regression, file end-to-end, desktop bridge, external
   MCP client, and per-format acceptance coverage.

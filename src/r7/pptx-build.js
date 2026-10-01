@@ -49,6 +49,12 @@ export const SPPR_ORDER = [
 /** Child order of `<p:txBody>`. */
 export const TXBODY_ORDER = ['a:bodyPr', 'a:lstStyle', 'a:p']
 
+/** Child order of `<a:bodyPr>`. */
+export const BODYPR_ORDER = [
+  'a:prstTxWarp', 'a:noAutofit', 'a:normAutofit', 'a:spAutoFit',
+  'a:scene3d', 'a:sp3d', 'a:flatTx', 'a:extLst'
+]
+
 /** Child order of `<p:sp>`. */
 const SP_ORDER = ['p:nvSpPr', 'p:spPr', 'p:txBody', 'p:style', 'p:extLst']
 
@@ -784,6 +790,31 @@ export function patchTextBodyAttribute(xml, name, value) {
   const bodyPr = firstElement(xml, 'a:bodyPr')
   if (!bodyPr) return xml
   const updated = withAttribute(bodyPr, name, value)
+  return xml.replace(bodyPr, updated)
+}
+
+/**
+ * Make a text body fit the placeholder it lives in instead of growing it.
+ *
+ * A slide-level placeholder inherits its box from the layout, so it must never
+ * carry a transform of its own. The price of an inherited box is that a long
+ * line has nowhere to go: without an autofit rule the renderer draws the text
+ * past the bottom of the box and on top of whatever follows. `<a:normAutofit/>`
+ * tells the renderer to shrink the text to the box, which is what every editor
+ * writes for a title.
+ *
+ * @param {string} xml - a shape, or markup containing one `<p:txBody>`.
+ * @returns {string}
+ */
+export function ensureNormAutofit(xml) {
+  const bodyPr = firstElement(xml, 'a:bodyPr')
+  if (!bodyPr) return xml
+  let updated = removeAll(bodyPr, 'a:noAutofit')
+  updated = removeAll(updated, 'a:spAutoFit')
+  if (!firstElement(updated, 'a:normAutofit')) {
+    updated = setChild(updated, 'a:normAutofit', '<a:normAutofit/>', BODYPR_ORDER)
+  }
+  if (updated === bodyPr) return xml
   return xml.replace(bodyPr, updated)
 }
 

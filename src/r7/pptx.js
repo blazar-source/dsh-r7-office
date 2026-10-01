@@ -19,6 +19,7 @@ import {
   buildPicture,
   buildShape,
   buildTextBody,
+  ensureNormAutofit,
   normalizeAnchor,
   patchShapeProperties,
   patchTextBodyAttribute,
@@ -778,17 +779,20 @@ export class PptxEngine {
     const zip = await ZipArchive.fromFile(filePath)
     const { descriptor, slideXml, object } = this._locate(zip, slideIndex, options)
 
-    let updated = slideXml
-    let inserted = false
+    // The object is located exactly once, against the slide as it is on disk.
+    // Locating it *after* a rewrite cannot work: the markup the read model
+    // cached no longer appears verbatim, and the old fall-through answered
+    // "not found" by appending a brand-new shape for an object that was on the
+    // slide all along. That is what put two `p:ph type="subTitle" idx="1"`
+    // shapes and two `p:cNvPr id="3"` shapes on one slide.
+    const located = locateElement(slideXml, object)
+    const inserted = located.inserted
+    let elementXml = located.elementXml
 
     if (options.paragraphs !== undefined || options.text !== undefined) {
       const paragraphs = options.paragraphs !== undefined ? options.paragraphs : [options.text]
-      updated = replaceTextBody(updated, object, paragraphs, options)
+      elementXml = replaceTextBody(elementXml, object, paragraphs, options)
     }
-
-    const located = locateElement(updated, object)
-    inserted = located.inserted
-    if (inserted) updated = withInsertedObject(updated, located.elementXml)
 
     if (options.imagePath) {
       const loaded = loadImage(options.imagePath)
@@ -805,13 +809,12 @@ export class PptxEngine {
         width: options.width === undefined ? object.width : options.width,
         height: options.height === undefined ? object.height : options.height
       }
-      const patchedPicture = patchPicture(located.elementXml, {
+      const patchedPicture = patchPicture(elementXml, {
         ...box,
         name: options.name,
         description: options.description
       })
-      updated = updated.replace(located.elementXml, patchedPicture)
-      zip.setText(descriptor.partPath, updated)
+      zip.setText(descriptor.partPath, commitElement(slideXml, located, patchedPicture))
       await this._write(zip, outputPath)
       return {
         success: true,
@@ -822,7 +825,7 @@ export class PptxEngine {
       }
     }
 
-    let patched = located.elementXml
+    let patched = elementXml
 
     if (object.type === 'image') {
       patched = patchPicture(patched, {
@@ -847,7 +850,7 @@ export class PptxEngine {
     const font = pickRunProperties(options)
     const hasFont = Object.keys(font).length > 0
     const wantsParagraphIndex = options.paragraphIndex !== undefined && options.paragraphIndex !== null
-    const paragraphSpec = pickParagraphProperties(options)
+    const paragraphSpec = titleSafeParagraphProperties(object, pickParagraphProperties(options))
     const applyParagraph = Object.keys(paragraphSpec).length > 0 || wantsParagraphIndex
 
     if (hasFont || applyParagraph) {
@@ -864,9 +867,11 @@ export class PptxEngine {
       }
     }
 
-    updated = updated.replace(located.elementXml, patched)
+    // A title keeps the box the layout gives it and lets the renderer fit the
+    // text, so a long line can never run into what follows.
+    if (isTitleObject(object)) patched = ensureNormAutofit(patched)
 
-    zip.setText(descriptor.partPath, updated)
+    zip.setText(descriptor.partPath, commitElement(slideXml, located, patched))
     await this._write(zip, outputPath)
 
     return {
@@ -931,6 +936,11 @@ export class PptxEngine {
     if (objectId !== null || objectName !== null) {
       const { object } = this._locate(zip, slideIndex, options)
       if (replace !== null && replace !== undefined) {
+        if (object.onSlide === false) {
+          throw new Error(
+            `Object "${object.name || object.id}" exists only in the layout; put it on the slide before editing it`
+          )
+        }
         const { elementXml } = locateElement(slideXml, object)
         slideXml = slideXml.replace(elementXml, replaceElementText(elementXml, search, replace))
         matchesCount++
@@ -972,16 +982,17 @@ export class PptxEngine {
     const { outputPath = filePath, slideIndex = 0, keepMedia = false } = options
     const zip = await ZipArchive.fromFile(filePath)
     const { descriptor, slideXml, object } = this._locate(zip, slideIndex, options)
-    const located = locateElement(slideXml, object)
 
     // A layout-only placeholder has nothing to remove: deleting it would
     // require an empty `<p:sp>` plus a "hide this placeholder" flag, which is a
     // different operation from removing a shape the author drew.
-    if (located.inserted) {
+    if (object.onSlide === false) {
       throw new Error(
         `Object "${object.name || object.id}" exists only in the layout and cannot be removed from the slide`
       )
     }
+
+    const located = locateElement(slideXml, object)
 
     zip.setText(descriptor.partPath, slideXml.replace(located.elementXml, ''))
 
@@ -1140,7 +1151,10 @@ export class PptxEngine {
         paragraphs: paragraphsForShape,
         placeholder: { type: definition.type, idx: definition.idx },
         style: null,
-        verticalAnchor: definition.type === 'title' || definition.type === 'ctrTitle' ? 'b' : undefined
+        verticalAnchor: definition.type === 'title' || definition.type === 'ctrTitle' ? 'b' : undefined,
+        // A title that inherits its box has to fit its text to that box, or a
+        // long line is drawn past the bottom and over the next object.
+        autofit: isTitle ? 'shrink' : undefined
       }))
     }
 
@@ -1246,6 +1260,12 @@ export class PptxEngine {
       }
     }
 
+    // Structure first: a duplicated shape id or a placeholder claimed twice
+    // makes a renderer draw one of the two and clip the other, which no other
+    // check in here would notice.
+    const structure = structuralReport(zip)
+    for (const error of structure.errors) errors.push(error)
+
     return {
       valid: errors.length === 0,
       errors,
@@ -1255,9 +1275,37 @@ export class PptxEngine {
         entries: zip.list().length,
         slides: descriptors.length,
         layouts: slideLayouts(zip).length,
-        media: listMedia(zip).length
+        media: listMedia(zip).length,
+        structure
       }
     }
+  }
+
+  /**
+   * Validate the *structure* of every slide.
+   *
+   * OOXML requires `p:cNvPr/@id` to be unique inside a slide, forbids id 0,
+   * and forbids two shapes claiming the same placeholder (`p:ph type` + `idx`).
+   * A deck that breaks any of these opens without complaint and renders wrong:
+   * the renderer draws whichever of the duplicates it meets first and clips the
+   * other, which reaches the user as "the text is on top of the title".
+   *
+   * @param {string} filePath
+   * @returns {Promise<{valid: boolean, errors: string[], warnings: string[], details: object}>}
+   */
+  async validateStructure(filePath) {
+    let zip
+    try {
+      zip = await ZipArchive.fromFile(filePath)
+    } catch (err) {
+      return {
+        valid: false,
+        errors: [`ZIP corruption: ${err.message}`],
+        warnings: [],
+        details: { slides: [] }
+      }
+    }
+    return structuralReport(zip)
   }
 
   /** Render the deck to PDF through the R7 converter. */
@@ -1364,6 +1412,33 @@ function clamp(value, min, max) {
  */
 const DECORATIVE_PLACEHOLDERS = new Set(['dt', 'ftr', 'sldNum', 'hdr'])
 
+/** The placeholder types that are the slide's title. */
+const TITLE_PLACEHOLDERS = new Set(['title', 'ctrTitle'])
+
+/** True when an object is the slide's title placeholder. */
+function isTitleObject(object) {
+  const type = object && object.placeholder ? object.placeholder.type : null
+  return Boolean(type && TITLE_PLACEHOLDERS.has(String(type).toLowerCase()))
+}
+
+/** Paragraph properties a title must not be given, because its box is fixed. */
+const TITLE_UNSAFE_PARAGRAPH_KEYS = ['lineSpacing', 'spaceBefore', 'spaceAfter']
+
+/**
+ * Drop the paragraph spacing a title cannot afford.
+ *
+ * A title placeholder inherits its box from the layout and never grows, so an
+ * explicit line spacing or a space-before/after is drawn straight out of the
+ * box and on top of the next object. Body lists are where those options belong;
+ * a per-paragraph request inside `paragraphs` is still honoured verbatim.
+ */
+function titleSafeParagraphProperties(object, spec) {
+  if (!isTitleObject(object)) return spec
+  const out = { ...spec }
+  for (const key of TITLE_UNSAFE_PARAGRAPH_KEYS) delete out[key]
+  return out
+}
+
 /** The next free `slideN.xml` number. */
 function nextNumber(names, regex, fallback) {
   const used = []
@@ -1431,6 +1506,101 @@ function nextShapeId(slideXml) {
   return max + 1
 }
 
+/**
+ * Check every slide's shape tree against the rules OOXML actually enforces.
+ *
+ *  - `p:cNvPr/@id` is unique inside a slide.
+ *  - a shape does not reuse the shape tree group's (`p:nvGrpSpPr`) id.
+ *  - no shape carries id 0, which is not a legal shape id.
+ *  - no two shapes claim the same placeholder (`p:ph type` + `idx`).
+ *
+ * None of these stop a deck from opening, which is exactly why they need
+ * checking: the renderer draws one of the duplicates, clips the other, and the
+ * author sees two objects on top of each other.
+ *
+ * @param {import('../shared/zip.js').ZipArchive} zip
+ * @returns {{valid: boolean, errors: string[], warnings: string[], details: object}}
+ */
+function structuralReport(zip) {
+  const errors = []
+  const warnings = []
+  const slides = []
+
+  let descriptors = []
+  try {
+    descriptors = slideParts(zip)
+  } catch (err) {
+    errors.push(`Cannot resolve the slide list: ${err.message}`)
+  }
+
+  for (const descriptor of descriptors) {
+    const label = descriptor.partPath.replace(/^ppt\/slides\//, '')
+    const slideXml = zip.getText(descriptor.partPath) || ''
+    const tree = extractElements(slideXml, 'p:spTree')[0]
+    const report = {
+      index: descriptor.index,
+      slideNumber: descriptor.index + 1,
+      partPath: descriptor.partPath,
+      shapeCount: 0,
+      groupId: null,
+      duplicateShapeIds: [],
+      duplicatePlaceholders: [],
+      zeroIds: [],
+      groupIdCollisions: []
+    }
+    slides.push(report)
+
+    if (!tree) {
+      errors.push(`${label}: has no <p:spTree>`)
+      continue
+    }
+
+    const groupCnvPr = firstElement(firstElement(tree.innerXml, 'p:nvGrpSpPr') || '', 'p:cNvPr')
+    report.groupId = groupCnvPr ? Number(getAttribute(groupCnvPr, 'id') || 0) : null
+
+    const elements = collectShapeElements(tree.innerXml)
+    report.shapeCount = elements.length
+
+    const byId = new Map()
+    const byPlaceholder = new Map()
+
+    for (const element of elements) {
+      const { id, name } = shapeIdentity(element.xml)
+      const shapeLabel = name || `#${id}`
+      if (id === 0) report.zeroIds.push(shapeLabel)
+      if (report.groupId !== null && id === report.groupId) report.groupIdCollisions.push(shapeLabel)
+      if (!byId.has(id)) byId.set(id, [])
+      byId.get(id).push(shapeLabel)
+
+      const placeholder = placeholderIdentity(element.xml)
+      if (placeholder) {
+        const key = `${placeholder.type}/${placeholder.idx === null ? '' : placeholder.idx}`
+        if (!byPlaceholder.has(key)) byPlaceholder.set(key, [])
+        byPlaceholder.get(key).push(shapeLabel)
+      }
+    }
+
+    for (const [id, names] of byId) {
+      if (names.length < 2) continue
+      report.duplicateShapeIds.push({ id, names })
+      errors.push(`${label}: duplicate shape id ${id} (${names.join(', ')})`)
+    }
+    for (const [key, names] of byPlaceholder) {
+      if (names.length < 2) continue
+      report.duplicatePlaceholders.push({ key, names })
+      errors.push(`${label}: duplicate placeholder ${key} (${names.join(', ')})`)
+    }
+    for (const name of report.zeroIds) {
+      errors.push(`${label}: shape "${name}" has id 0, which is not a legal shape id`)
+    }
+    for (const name of report.groupIdCollisions) {
+      errors.push(`${label}: shape "${name}" reuses the shape-tree group id ${report.groupId}`)
+    }
+  }
+
+  return { valid: errors.length === 0, errors, warnings, details: { slides } }
+}
+
 /** Append (or insert at a z-order position) an object into a slide's shape tree. */
 function insertIntoShapeTree(slideXml, objectXml, zOrder = null) {
   const tree = extractElements(slideXml, 'p:spTree')[0]
@@ -1454,26 +1624,57 @@ function insertIntoShapeTree(slideXml, objectXml, zOrder = null) {
 /**
  * Locate an object's markup inside a slide.
  *
- * The read model keeps the exact XML it parsed, so the object's extent is a
- * plain substring search rather than a second parse that could disagree with
- * the first one.
+ * The read model caches the exact XML it parsed, so the first attempt is a
+ * plain substring search — but that cache goes stale the moment anything
+ * rewrites the object, and an object that exists only in the layout has no
+ * markup on the slide at all. Both cases used to end in the same place: a
+ * brand-new shape was appended for an object that was already there, which put
+ * two shapes with one `cNvPr/@id` and two shapes with one `p:ph` on the slide.
  *
- * @returns {{elementXml: string, inserted: boolean}} `inserted` is true when
- *   the object existed only in the layout and a real shape had to be placed on
- *   the slide for the edit to land somewhere.
+ * The search therefore falls back to identity, in the order a caller means:
+ * the id it read, then the name, then the placeholder `(type, idx)`. Only a
+ * layout-only object — one the read model reported with `onSlide: false` — is
+ * materialised, and that copy always takes a fresh id.
+ *
+ * @param {string} slideXml
+ * @param {object} object - a read-model object.
+ * @returns {{elementXml: string, inserted: boolean}} `inserted` is true only
+ *   when a real shape had to be placed on the slide for the edit to land.
  */
 function locateElement(slideXml, object) {
+  const tree = extractElements(slideXml, 'p:spTree')[0]
+  if (!tree) throw new Error('Invalid slide: <p:spTree> not found')
+
   const elementXml = object._element
   if (elementXml && slideXml.includes(elementXml)) {
     return { elementXml, inserted: false }
   }
 
-  // The object exists only in the layout: materialise it as a real shape so the
-  // edit has somewhere to land, and report that it happened.
-  const materialised = materialisePlaceholder(object)
-  const tree = extractElements(slideXml, 'p:spTree')[0]
-  if (!tree) throw new Error('Invalid slide: <p:spTree> not found')
-  return { elementXml: materialised, inserted: true }
+  const elements = collectShapeElements(tree.innerXml)
+
+  if (object.id) {
+    const found = elements.find((el) => shapeIdentity(el.xml).id === object.id)
+    if (found) return { elementXml: found.xml, inserted: false }
+  }
+
+  if (object.name) {
+    const found = elements.find((el) => shapeIdentity(el.xml).name === object.name)
+    if (found) return { elementXml: found.xml, inserted: false }
+  }
+
+  if (object.placeholder) {
+    const found = elements.find((el) => samePlaceholderOf(el.xml, object.placeholder))
+    if (found) return { elementXml: found.xml, inserted: false }
+  }
+
+  // Nothing on the slide carries this object's identity. A layout-only
+  // placeholder is the one case where a shape has to be written.
+  if (object.onSlide === false) return materialisePlaceholder(slideXml, object)
+
+  throw new Error(
+    `Object "${object.name || object.id}" is reported on the slide but its markup was not found; `
+    + 'refusing to add a second shape for it'
+  )
 }
 
 /** Place a materialised object into the shape tree marked by an insertion. */
@@ -1483,8 +1684,61 @@ function withInsertedObject(slideXml, objectXml) {
   return slideXml.replace(tree.innerXml, `${tree.innerXml}${objectXml}`)
 }
 
-/** Build a real slide-level shape from a layout placeholder definition. */
-function materialisePlaceholder(object) {
+/** Write a located object back into its slide, appending it when it is new. */
+function commitElement(slideXml, located, elementXml) {
+  if (located.inserted) return withInsertedObject(slideXml, elementXml)
+  return slideXml.replace(located.elementXml, elementXml)
+}
+
+/** The `cNvPr` identity of a shape element: its id and its name. */
+function shapeIdentity(elementXml) {
+  const cNvPr = openingTag(firstElement(elementXml, 'p:cNvPr') || '')
+  return {
+    id: Number(getAttribute(cNvPr, 'id') || 0),
+    name: getAttribute(cNvPr, 'name') || null
+  }
+}
+
+/** The `<p:ph>` descriptor of a shape element, as `(type, idx)`. */
+function placeholderIdentity(elementXml) {
+  const ph = firstElement(elementXml, 'p:ph')
+  if (!ph) return null
+  return {
+    type: getAttribute(ph, 'type') || 'body',
+    idx: getAttribute(ph, 'idx')
+  }
+}
+
+/** True when a shape's placeholder is exactly the one an object addresses. */
+function samePlaceholderOf(elementXml, placeholder) {
+  const found = placeholderIdentity(elementXml)
+  if (!found || !placeholder || !placeholder.type) return false
+  if (found.type !== String(placeholder.type)) return false
+  const wanted = placeholder.idx === null || placeholder.idx === undefined ? null : String(placeholder.idx)
+  return found.idx === wanted
+}
+
+/**
+ * Build a real slide-level shape from a layout placeholder definition.
+ *
+ * A placeholder the slide already carries is reused, never copied: the copy
+ * would claim the same `p:ph` and leave the renderer free to draw either one.
+ * A genuinely new shape takes its id from the slide, never from the layout —
+ * the layout numbers its own shapes from 1 and the slide numbers from 2, so
+ * inheriting the layout's id is what produced two shapes with id 3.
+ *
+ * @returns {{elementXml: string, inserted: boolean}}
+ */
+function materialisePlaceholder(slideXml, object) {
+  const tree = extractElements(slideXml, 'p:spTree')[0]
+  if (!tree) throw new Error('Invalid slide: <p:spTree> not found')
+
+  if (object.placeholder) {
+    const existing = collectShapeElements(tree.innerXml)
+      .find((el) => samePlaceholderOf(el.xml, object.placeholder))
+    if (existing) return { elementXml: existing.xml, inserted: false }
+  }
+
   const placeholder = object.placeholder || {}
 
   // Paragraph shape is carried over, styling is not: a placeholder that had no
@@ -1509,8 +1763,8 @@ function materialisePlaceholder(object) {
     paragraphs.push(rebuilt)
   }
 
-  return buildShape({
-    id: object.id && object.id > 0 ? object.id : 9000,
+  const elementXml = buildShape({
+    id: nextShapeId(slideXml),
     name: object.name || `Placeholder ${placeholder.type}`,
     preset: object.preset && object.preset !== 'custom' ? object.preset : 'rect',
     placeholder: { type: placeholder.type, idx: placeholder.idx },
@@ -1522,18 +1776,27 @@ function materialisePlaceholder(object) {
     width: object.inherited && object.width !== null ? object.width : undefined,
     height: object.inherited && object.height !== null ? object.height : undefined,
     paragraphs: paragraphs.length > 0 ? paragraphs : [],
+    // A title shape that appears on the slide keeps the layout's box and lets
+    // the renderer fit the text to it.
+    autofit: isTitleObject(object) ? 'shrink' : undefined,
     style: null
   })
+
+  return { elementXml, inserted: true }
 }
 
 /**
  * Replace the whole text body of an object.
  *
+ * The object's own markup is passed in and returned: this is a pure rewrite of
+ * one element, so the caller can decide where the result belongs. Locating the
+ * element again after the rewrite is what used to create a duplicate.
+ *
  * Only run-level and text-body options are forwarded: an `alignment` on the
  * object is a request about its paragraphs, not about every new paragraph the
  * caller happens to have left unaligned.
  */
-function replaceTextBody(slideXml, object, paragraphs, options) {
+function replaceTextBody(elementXml, object, paragraphs, options) {
   const bodySpec = {}
   for (const key of ['verticalAnchor', 'wrap', 'autofit', 'insetLeft', 'insetTop', 'insetRight', 'insetBottom']) {
     if (options[key] !== undefined) bodySpec[key] = options[key]
@@ -1542,21 +1805,23 @@ function replaceTextBody(slideXml, object, paragraphs, options) {
   for (const key of ['family', 'complexFamily', 'size', 'bold', 'italic', 'underline', 'color', 'transparency', 'strike', 'caps', 'spacing', 'baseline', 'highlight']) {
     if (options[key] !== undefined) bodySpec[key] = options[key]
   }
+  // A title keeps the box the layout gives it, so its text is fitted to that
+  // box and never inflated by body-level paragraph spacing.
+  if (isTitleObject(object)) {
+    delete bodySpec.lineSpacing
+    delete bodySpec.spaceBefore
+    delete bodySpec.spaceAfter
+    bodySpec.autofit = 'shrink'
+  }
 
   const textBody = buildTextBody(paragraphs, bodySpec)
-  const located = locateElement(slideXml, object)
-  const base = located.inserted ? withInsertedObject(slideXml, located.elementXml) : slideXml
-  const existing = firstElement(located.elementXml, 'p:txBody')
+  const existing = firstElement(elementXml, 'p:txBody')
 
-  let patched
-  if (existing) {
-    patched = located.elementXml.replace(existing, textBody)
-  } else if (object.type === 'image') {
+  if (existing) return elementXml.replace(existing, textBody)
+  if (object.type === 'image') {
     throw new Error(`Object "${object.name || object.id}" is an image and cannot hold text`)
-  } else {
-    patched = insertTextBody(located.elementXml, textBody)
   }
-  return base.replace(located.elementXml, patched)
+  return insertTextBody(elementXml, textBody)
 }
 
 /** Insert a `<p:txBody>` into a shape that has none, in schema order. */
@@ -1577,17 +1842,32 @@ function setFirstText(slideXml, text) {
   if (!firstShape) return slideXml
   const shapeXml = firstShape.xml
   const body = firstElement(shapeXml, 'p:txBody')
-  const replacement = `<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ru-RU"/><a:t>${escapeText(text)}</a:t></a:r></a:p></p:txBody>`
+  const paragraph = `<a:p><a:r><a:rPr lang="ru-RU"/><a:t>${escapeText(text)}</a:t></a:r></a:p>`
 
+  let patched
   if (body) {
-    const patched = shapeXml.replace(body, body.replace(/<a:p>[\s\S]*<\/a:p>/, replacement.replace(/^<p:txBody>/, '').replace(/<\/p:txBody>$/, '')))
-    return slideXml.replace(shapeXml, patched)
+    // Only the paragraphs are swapped. Writing a whole `<p:txBody>` here puts a
+    // second `<a:bodyPr>` and a second `<a:lstStyle>` next to the ones the body
+    // already has, and `p:txBody` allows exactly one of each — a schema
+    // violation that a validator reports and a repair prompt acts on.
+    const paragraphs = extractElements(body, 'a:p')
+    const bodyXml = paragraphs.length === 0
+      ? body.replace('</p:txBody>', `${paragraph}</p:txBody>`)
+      : body.slice(0, paragraphs[0].index)
+        + paragraph
+        + body.slice(paragraphs[paragraphs.length - 1].index + paragraphs[paragraphs.length - 1].outerXml.length)
+    patched = shapeXml.replace(body, bodyXml)
+  } else {
+    const textBody = `<p:txBody><a:bodyPr/><a:lstStyle/>${paragraph}</p:txBody>`
+    patched = shapeXml.replace(
+      /(<p:spPr(?:\s[^>]*)?\/>|<p:spPr[\s\S]*?<\/p:spPr>)/,
+      `$1${textBody}`
+    )
   }
-  const inserted = shapeXml.replace(
-    /(<p:spPr(?:\s[^>]*)?\/>|<p:spPr[\s\S]*?<\/p:spPr>)/,
-    `$1${replacement}`
-  )
-  return slideXml.replace(shapeXml, inserted)
+
+  // The title is fitted to the box it inherits, never allowed to grow past it.
+  patched = ensureNormAutofit(patched)
+  return slideXml.replace(shapeXml, patched)
 }
 
 /** Replace a search string inside one object's text. */

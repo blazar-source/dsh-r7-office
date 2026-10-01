@@ -3,14 +3,21 @@
  *
  *   node examples/pptx-acceptance.js [outputDirectory]
  *
- * Builds `R7_MCP_PPTX_Acceptance.pptx` (seven slides) and renders it to
- * `R7_MCP_PPTX_Acceptance.pdf` through the R7 converter when one is installed.
- * Nothing is committed: the default location is under the OS temp directory.
+ * Builds `R7_MCP_PPTX_Acceptance.pptx` (seven slides), checks its structure
+ * (duplicate shape ids, duplicate placeholders, overflow, unintended overlap)
+ * and renders it to `R7_MCP_PPTX_Acceptance.pdf` through the R7 converter when
+ * one is installed. Nothing is committed: the default location is under the OS
+ * temp directory.
  *
  * Everything here goes through the documented public surface — `create`,
  * `addSlide`, `addShape`, `addTextBox`, `addImage`, `formatObject`,
  * `duplicateSlide`, `moveSlide`, `readSlide` — because an example that needs a
  * private back door is not an example of the product.
+ *
+ * Geometry is read back, never guessed: every object that has to sit below an
+ * inherited placeholder box asks the engine where that box ends. A slide-level
+ * placeholder keeps the layout's geometry, so a hardcoded `y` is exactly how a
+ * title ends up underneath the object that was supposed to follow it.
  */
 
 import fs from 'node:fs'
@@ -30,6 +37,21 @@ const GREEN = '#0E9F6E'
 const PANEL = '#F3F6FB'
 const WHITE = '#FFFFFF'
 
+const EMU_CM = 360000
+const EMU_PT = 12700
+/** Air between an inherited box and the object placed below it. */
+const GAP = 200000
+/** 1 pt of tolerance, so touching edges are not reported as an overlap. */
+const TOLERANCE = EMU_PT
+/**
+ * Marks a backdrop panel: a shape drawn behind other shapes on purpose.
+ *
+ * The marker travels inside the file as `p:cNvPr/@descr`, so the overlap check
+ * below can tell a deliberate panel from the accidental overlap this example
+ * exists to catch.
+ */
+const BACKDROP = 'backdrop'
+
 const outDir = path.resolve(process.argv[2] || path.join(os.tmpdir(), 'r7-acceptance'))
 fs.mkdirSync(outDir, { recursive: true })
 
@@ -47,6 +69,35 @@ function step(text) {
 }
 
 console.log(`Acceptance deck -> ${deckPath}\n`)
+
+// ------------------------------------------------------------- geometry API
+
+/** The slide canvas in EMU. */
+async function canvasSize() {
+  const info = await pptx.inspect(deckPath)
+  return info.slideSize
+}
+
+/** A placeholder object by type, straight out of the read model. */
+async function placeholder(slideIndex, types) {
+  const wanted = Array.isArray(types) ? types : [types]
+  const read = await pptx.readSlide(deckPath, slideIndex)
+  return read.slide.objects.find((o) => o.placeholder && wanted.includes(o.placeholder.type)) || null
+}
+
+/**
+ * The first `y` that clears every inherited placeholder box of the given
+ * types, read back from the slide rather than assumed.
+ */
+async function belowPlaceholders(slideIndex, types, extra = 0) {
+  const read = await pptx.readSlide(deckPath, slideIndex)
+  const wanted = Array.isArray(types) ? types : [types]
+  const bottoms = read.slide.objects
+    .filter((o) => o.onSlide && o.placeholder && wanted.includes(o.placeholder.type))
+    .map((o) => (o.y === null || o.height === null ? null : o.y + o.height))
+    .filter((value) => value !== null)
+  return (bottoms.length > 0 ? Math.max(...bottoms) : 0) + GAP + extra
+}
 
 // ------------------------------------------------------- 1. title slide
 
@@ -75,15 +126,24 @@ await pptx.create(deckPath, { overwrite: true, title: 'Годовой отчёт
     })
   }
   // A rule under the title, drawn as a shape rather than set as a border, so
-  // the deck stays editable in any editor.
+  // the deck stays editable in any editor. Its `y` comes from where the
+  // subtitle's inherited box actually ends — the box is taller than its one
+  // line of text, and a rule placed inside it is drawn on top of the subtitle.
+  const size = await canvasSize()
+  const ruleTop = await belowPlaceholders(0, ['ctrTitle', 'title', 'subTitle'])
   await pptx.addShape(deckPath, {
     slideIndex: 0,
     shape: 'rectangle',
     name: 'Линейка',
-    x: '5.9cm', y: '10.4cm', width: '2.8cm', height: '4pt',
-    fill: ACCENT, noLine: true
+    x: Math.round((size.width - 2.8 * EMU_CM) / 2),
+    y: ruleTop,
+    width: 2.8 * EMU_CM,
+    height: 4 * EMU_PT,
+    fill: ACCENT,
+    noLine: true
   })
   step(`титул: "${title.text}" + подзаголовок, шрифты Georgia/Arial, акцент ${ACCENT_DARK}`)
+  step(`линейка под подзаголовком: y=${ruleTop} EMU (низ бокса подзаголовка + ${GAP})`)
 }
 
 // ---------------------------------------------- 2. heading + body text
@@ -100,9 +160,8 @@ await pptx.addSlide(deckPath, {
   ]
 })
 {
-  const slide = await pptx.readSlide(deckPath, 1)
-  const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
-  const body = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
+  const title = await placeholder(1, 'title')
+  const body = await placeholder(1, 'body')
   await pptx.formatObject(deckPath, {
     slideIndex: 1, objectId: title.id,
     font: { family: 'Arial', size: 30, bold: true, color: INK }, alignment: 'left'
@@ -120,13 +179,13 @@ await pptx.addSlide(deckPath, {
 console.log('3. Две колонки')
 await pptx.addSlide(deckPath, { layoutType: 'twoObj', title: 'Что сработало и что нет' })
 {
-  const slide = await pptx.readSlide(deckPath, 2)
-  const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
+  const title = await placeholder(2, 'title')
   await pptx.formatObject(deckPath, {
     slideIndex: 2, objectId: title.id, font: { family: 'Arial', size: 30, bold: true, color: INK }
   })
 
-  const columns = slide.slide.objects.filter(
+  const read = await pptx.readSlide(deckPath, 2)
+  const columns = read.slide.objects.filter(
     (o) => o.onSlide && o.placeholder && (o.placeholder.type === 'body' || o.placeholder.type === 'obj')
   )
   const left = columns[0]
@@ -161,9 +220,8 @@ await pptx.addSlide(deckPath, { layoutType: 'twoObj', title: 'Что срабо�
 console.log('4. Нумерованный и маркированный список')
 await pptx.addSlide(deckPath, { layoutType: 'obj', title: 'План на следующий год' })
 {
-  const slide = await pptx.readSlide(deckPath, 3)
-  const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
-  const body = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
+  const title = await placeholder(3, 'title')
+  const body = await placeholder(3, 'body')
   await pptx.formatObject(deckPath, {
     slideIndex: 3, objectId: title.id, font: { family: 'Arial', size: 30, bold: true, color: INK }
   })
@@ -188,8 +246,8 @@ await pptx.addSlide(deckPath, { layoutType: 'obj', title: 'План на сле�
 console.log('5. Карточки KPI из фигур')
 await pptx.addSlide(deckPath, { layoutType: 'titleOnly', title: 'Показатели года' })
 {
-  const slide = await pptx.readSlide(deckPath, 4)
-  const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
+  const size = await canvasSize()
+  const title = await placeholder(4, 'title')
   await pptx.formatObject(deckPath, {
     slideIndex: 4, objectId: title.id, font: { family: 'Arial', size: 30, bold: true, color: INK }
   })
@@ -201,70 +259,63 @@ await pptx.addSlide(deckPath, { layoutType: 'titleOnly', title: 'Показат�
   ]
 
   // A panel behind the cards, inserted at z-order 0 so it stays behind them.
+  // It is marked `descr="backdrop"`: a panel drawn behind other shapes is the
+  // one overlap this deck intends, and the check below skips it by that mark.
+  const panelTop = await belowPlaceholders(4, 'title')
+  const panelHeight = 9.4 * EMU_CM
   await pptx.addShape(deckPath, {
     slideIndex: 4,
     shape: 'rounded-rectangle',
     name: 'Подложка',
+    description: BACKDROP,
     zOrder: 0,
-    x: '1.4cm', y: '4.2cm', width: '30.6cm', height: '9.4cm',
+    x: 1.4 * EMU_CM, y: panelTop, width: 30.6 * EMU_CM, height: panelHeight,
     fill: PANEL, noLine: true
   })
 
+  const cardTop = panelTop + 0.6 * EMU_CM
+  const barHeight = 0.35 * EMU_CM
+  const cardHeight = 8.2 * EMU_CM
+
   for (const [index, card] of cards.entries()) {
-    const x = `${1.4 + index * 10.6}cm`
-    await pptx.addShape(deckPath, {
-      slideIndex: 4,
-      shape: 'rounded-rectangle',
-      name: `Карточка ${card.label}`,
-      x, y: '4.8cm', width: '9.4cm', height: '8.2cm',
-      fill: WHITE, line: '#D2DAE6', lineWidth: 1
-    })
-    // A colour bar makes each card identifiable at a glance.
+    const x = (1.4 + index * 10.6) * EMU_CM
+    // The colour bar sits on the card's top edge rather than on top of the
+    // card: touching edges are not an overlap, and the deck stays clean.
     await pptx.addShape(deckPath, {
       slideIndex: 4,
       shape: 'rectangle',
       name: `Полоса ${card.label}`,
-      x, y: '4.8cm', width: '9.4cm', height: '0.35cm',
+      x, y: cardTop, width: 9.4 * EMU_CM, height: barHeight,
       fill: card.colour, noLine: true
     })
-    await pptx.addTextBox(deckPath, {
+    // One card is one shape carrying its own three paragraphs: a card with
+    // separate text boxes stacked over it is three shapes that all overlap it.
+    await pptx.addShape(deckPath, {
       slideIndex: 4,
-      name: `Подпись ${card.label}`,
-      x: `${2.0 + index * 10.6}cm`, y: '5.5cm', width: '8.2cm', height: '1.0cm',
-      text: card.label,
-      font: { family: 'Arial', size: 13, color: MUTED },
-      alignment: 'center', verticalAnchor: 'middle',
-      fill: null, noFill: true, noLine: true
-    })
-    await pptx.addTextBox(deckPath, {
-      slideIndex: 4,
-      name: `Значение ${card.label}`,
-      x: `${2.0 + index * 10.6}cm`, y: '6.6cm', width: '8.2cm', height: '2.4cm',
-      text: card.value,
-      font: { family: 'Georgia', size: 30, bold: true, color: INK },
-      alignment: 'center', verticalAnchor: 'middle',
-      fill: null, noFill: true, noLine: true
-    })
-    await pptx.addTextBox(deckPath, {
-      slideIndex: 4,
-      name: `Динамика ${card.label}`,
-      x: `${2.0 + index * 10.6}cm`, y: '9.4cm', width: '8.2cm', height: '1.2cm',
-      text: card.delta,
-      font: { family: 'Arial', size: 14, bold: true, color: card.colour },
-      alignment: 'center', verticalAnchor: 'middle',
-      fill: null, noFill: true, noLine: true
+      shape: 'rounded-rectangle',
+      name: `Карточка ${card.label}`,
+      x, y: cardTop + barHeight, width: 9.4 * EMU_CM, height: cardHeight,
+      fill: WHITE, line: '#D2DAE6', lineWidth: 1,
+      verticalAnchor: 'middle',
+      font: { family: 'Arial' },
+      paragraphs: [
+        { text: card.label, size: 13, color: MUTED, alignment: 'center', spaceAfter: 6 },
+        { text: card.value, size: 30, bold: true, color: INK, family: 'Georgia', alignment: 'center', spaceAfter: 6 },
+        { text: card.delta, size: 14, bold: true, color: card.colour, alignment: 'center' }
+      ]
     })
   }
 
-  // A trend line across the panel, with an arrow head.
+  // A trend line across the panel, below it and with no height of its own.
   await pptx.addShape(deckPath, {
     slideIndex: 4,
     shape: 'line',
     name: 'Тренд',
-    x: '2.4cm', y: '14.2cm', width: '28.6cm', height: 0,
+    x: 2.4 * EMU_CM, y: panelTop + panelHeight + Math.round(GAP / 2), width: 28.6 * EMU_CM, height: 0,
     line: ACCENT, lineWidth: 1.5, arrows: { tail: 'triangle' }
   })
-  step('подложка + 3 карточки (rect/roundRect), цветные полосы, 9 надписей, линия со стрелкой')
+  step(`подложка (descr="${BACKDROP}", исключена из проверки перекрытий) + 3 карточки с текстом + полосы + линия со стрелкой`)
+  step(`подложка под заголовком: y=${panelTop} EMU (низ бокса заголовка + ${GAP}), слайд ${size.width}x${size.height}`)
 }
 
 // ------------------------------------------------- 6. image + caption
@@ -274,32 +325,46 @@ console.log('6. Изображение с подписью')
   // The picture is generated here rather than shipped with the repository: no
   // binary fixture, no third-party asset, and the deck stays self-contained.
   const pngPath = path.join(outDir, 'acceptance-chart.png')
-  fs.writeFileSync(pngPath, makeChartPng(560, 320))
+  const chartWidth = 560
+  const chartHeight = 320
+  fs.writeFileSync(pngPath, makeChartPng(chartWidth, chartHeight))
 
   await pptx.addSlide(deckPath, { layoutType: 'titleOnly', title: 'Динамика выручки по кварталам' })
-  const slide = await pptx.readSlide(deckPath, 5)
-  const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
+  const title = await placeholder(5, 'title')
   await pptx.formatObject(deckPath, {
     slideIndex: 5, objectId: title.id, font: { family: 'Arial', size: 30, bold: true, color: INK }
   })
+
+  // The picture and its caption are fitted into the space that is actually
+  // left below the title, measured from the slide, so neither can reach into
+  // the title's box or past the bottom of the slide.
+  const size = await canvasSize()
+  const top = await belowPlaceholders(5, 'title')
+  const captionHeight = 1.4 * EMU_CM
+  const available = size.height - top - captionHeight - GAP
+  const ratio = chartWidth / chartHeight
+  const imageWidth = Math.min(24 * EMU_CM, Math.floor(available * ratio))
+  const imageHeight = Math.round(imageWidth / ratio)
 
   const image = await pptx.addImage(deckPath, {
     slideIndex: 5,
     imagePath: pngPath,
     name: 'Диаграмма выручки',
-    x: '4.0cm', y: '4.2cm', width: '24.0cm',
+    x: Math.round((size.width - imageWidth) / 2), y: top, width: imageWidth,
     description: 'Столбчатая диаграмма выручки по кварталам 2026 года'
   })
   await pptx.addTextBox(deckPath, {
     slideIndex: 5,
     name: 'Подпись к рисунку',
-    x: '4.0cm', y: '15.4cm', width: '24.0cm', height: '1.4cm',
+    x: Math.round((size.width - imageWidth) / 2), y: top + imageHeight + Math.round(GAP / 2),
+    width: imageWidth, height: captionHeight,
     text: 'Рис. 1. Выручка по кварталам, млн ₽ (данные внутренней отчётности)',
     font: { family: 'Arial', size: 12, italic: true, color: MUTED },
     alignment: 'center', verticalAnchor: 'middle',
     fill: null, noFill: true, noLine: true
   })
   step(`изображение вставлено (${image.image.mediaPath}, ${image.image.naturalWidth}x${image.image.naturalHeight} px) + подпись`)
+  step(`картинка ${imageWidth}x${imageHeight} EMU от y=${top} (низ бокса заголовка + ${GAP}), подпись ниже картинки`)
 
   // Exercise image replacement on the same object, then put the original back.
   await pptx.formatObject(deckPath, {
@@ -313,9 +378,8 @@ console.log('6. Изображение с подписью')
 console.log('7. Закрывающий слайд')
 await pptx.addSlide(deckPath, { layoutType: 'title', title: 'Спасибо за внимание', subtitle: 'Вопросы и обсуждение' })
 {
-  const slide = await pptx.readSlide(deckPath, 6)
-  const title = slide.slide.objects.find((o) => o.placeholder && (o.placeholder.type === 'ctrTitle' || o.placeholder.type === 'title'))
-  const subtitle = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'subTitle')
+  const title = await placeholder(6, ['ctrTitle', 'title'])
+  const subtitle = await placeholder(6, 'subTitle')
   await pptx.formatObject(deckPath, {
     slideIndex: 6, objectId: title.id,
     font: { family: 'Georgia', size: 40, bold: true, color: ACCENT_DARK }, alignment: 'center'
@@ -326,26 +390,27 @@ await pptx.addSlide(deckPath, { layoutType: 'title', title: 'Спасибо за
       font: { family: 'Arial', size: 16, color: MUTED }, alignment: 'center'
     })
   }
-  // A contact strip built from shapes, to prove shapes carry text well.
+  // A contact strip built from shapes, to prove shapes carry text well. It
+  // starts below the subtitle's box, not at a guessed height.
+  const stripTop = await belowPlaceholders(6, ['ctrTitle', 'title', 'subTitle'])
   await pptx.addShape(deckPath, {
     slideIndex: 6,
     shape: 'rounded-rectangle',
     name: 'Контакты',
-    x: '9.0cm', y: '12.4cm', width: '14.2cm', height: '1.8cm',
+    x: 9.0 * EMU_CM, y: stripTop, width: 14.2 * EMU_CM, height: 1.8 * EMU_CM,
     fill: ACCENT, noLine: true,
     text: 'finance@example.ru  ·  +7 495 000-00-00',
     font: { family: 'Arial', size: 14, bold: true, color: WHITE },
     alignment: 'center', verticalAnchor: 'middle'
   })
-  step('закрывающий слайд на титульном макете + плашка с контактами')
+  step(`закрывающий слайд на титульном макете + плашка с контактами от y=${stripTop} EMU`)
 }
 
 // -------------------------------------------- 8. editing an existing object
 
 console.log('8. Правка существующего объекта и порядок слайдов')
 {
-  const before = await pptx.readSlide(deckPath, 1)
-  const body = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
+  const body = await placeholder(1, 'body')
   await pptx.formatObject(deckPath, {
     slideIndex: 1,
     objectId: body.id,
@@ -366,14 +431,17 @@ console.log('8. Правка существующего объекта и пор
 
 const finalSlide = await pptx.readSlide(deckPath, 0)
 const validation = await pptx.validate(deckPath)
+const structure = await pptx.validateStructure(deckPath)
 const inspection = await pptx.inspect(deckPath)
 const layouts = await pptx.listLayouts(deckPath)
+const size = inspection.slideSize
 
 console.log('\n--- Итог -------------------------------------------------')
 console.log(`  слайдов:            ${finalSlide.slideCount}`)
 console.log(`  макетов:            ${layouts.layouts.length}`)
-console.log(`  размер слайда:      ${inspection.slideSize.width}x${inspection.slideSize.height} EMU`)
+console.log(`  размер слайда:      ${size.width}x${size.height} EMU`)
 console.log(`  валидация:          ${validation.valid ? 'ok' : `ОШИБКИ: ${validation.errors.join('; ')}`}`)
+console.log(`  структура:          ${structure.valid ? 'ok' : `ОШИБКИ: ${structure.errors.join('; ')}`}`)
 console.log(`  размер файла:       ${fs.statSync(deckPath).size} байт`)
 
 for (let i = 0; i < finalSlide.slideCount; i++) {
@@ -385,8 +453,67 @@ for (let i = 0; i < finalSlide.slideCount; i++) {
   console.log(`  ${i + 1}. [${slide.slide.layout.type}] ${texts[0] || '(без текста)'} — объектов: ${shapes}`)
 }
 
+// --------------------------------------------------- structure and geometry
+
+console.log('\n--- Структура и геометрия (измерено) ---------------------')
+const problems = []
+for (let i = 0; i < finalSlide.slideCount; i++) {
+  const slide = await pptx.readSlide(deckPath, i)
+  const reportSlide = structure.details.slides[i]
+  const shapes = slide.slide.objects.filter((o) => o.onSlide)
+  const overflow = []
+  for (const object of shapes) {
+    if (object.x === null || object.y === null || object.width === null || object.height === null) continue
+    const label = object.name || object.id
+    if (object.x < -1 || object.y < -1) overflow.push(`${label}: отрицательная координата ${object.x},${object.y}`)
+    if (object.x + object.width > size.width + 1000) {
+      overflow.push(`${label}: выход вправо на ${Math.round((object.x + object.width - size.width) / EMU_PT)} pt`)
+    }
+    if (object.y + object.height > size.height + 1000) {
+      overflow.push(`${label}: выход вниз на ${Math.round((object.y + object.height - size.height) / EMU_PT)} pt`)
+    }
+  }
+
+  const boxed = shapes.filter((o) => o.positionValid !== false && (o.width || 0) > 0 && (o.height || 0) > 0)
+  const backdrop = boxed.filter((o) => o.description === BACKDROP)
+  const checked = boxed.filter((o) => o.description !== BACKDROP)
+  const overlaps = []
+  for (let a = 0; a < checked.length; a++) {
+    for (let b = a + 1; b < checked.length; b++) {
+      const A = checked[a]
+      const B = checked[b]
+      const ox = Math.min(A.x + A.width, B.x + B.width) - Math.max(A.x, B.x)
+      const oy = Math.min(A.y + A.height, B.y + B.height) - Math.max(A.y, B.y)
+      if (ox > TOLERANCE && oy > TOLERANCE) {
+        overlaps.push(`${A.name || A.id} x ${B.name || B.id} (${Math.round(ox / EMU_PT)}x${Math.round(oy / EMU_PT)}pt)`)
+      }
+    }
+  }
+
+  console.log(
+    `  слайд ${i + 1}: объектов ${reportSlide.shapeCount}`
+    + ` | dup id ${reportSlide.duplicateShapeIds.length}`
+    + ` | dup placeholder ${reportSlide.duplicatePlaceholders.length}`
+    + ` | id=0 ${reportSlide.zeroIds.length}`
+    + ` | выход за границы ${overflow.length}`
+    + ` | перекрытий ${overlaps.length}`
+    + (backdrop.length > 0 ? ` | подложек исключено ${backdrop.length}` : '')
+  )
+  for (const text of [...overflow, ...overlaps]) console.log(`      ${text}`)
+  if (overflow.length > 0 || overlaps.length > 0) {
+    problems.push(`slide ${i + 1}: ${[...overflow, ...overlaps].join('; ')}`)
+  }
+}
+
+console.log(`\n  дубликаты id/placeholder: ${structure.errors.length === 0 ? 'нет' : structure.errors.join('; ')}`)
+console.log(`  непреднамеренных перекрытий и выходов за границы: ${problems.length === 0 ? 'нет' : problems.join(' | ')}`)
+
 if (!validation.valid) {
   console.error('\nDeck is invalid; not rendering.')
+  process.exit(1)
+}
+if (!structure.valid || problems.length > 0) {
+  console.error('\nDeck is structurally unsound; not rendering.')
   process.exit(1)
 }
 

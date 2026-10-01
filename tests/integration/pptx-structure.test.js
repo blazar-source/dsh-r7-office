@@ -6,7 +6,8 @@ import { PptxEngine } from '../../src/r7/pptx.js'
 import { ZipArchive } from '../../src/shared/zip.js'
 import { extractElements, getAttribute } from '../../src/shared/xml.js'
 import { slideParts, openingTag, firstElement } from '../../src/r7/pptx-util.js'
-import { tempDir } from './helpers/pptx-fixtures.js'
+import { requiresR7 } from '../helpers/r7-gate.js'
+import { tempDir, addSlideAnywhere } from './helpers/pptx-fixtures.js'
 
 /**
  * Structural integrity of a written deck.
@@ -36,16 +37,36 @@ describe('PPTX structural integrity', () => {
     }
   })
 
-  /** A deck with a title slide and one "title and content" slide. */
+  /**
+   * A deck with a title slide and one "title and content" slide.
+   *
+   * With R7 that second slide is built on the content layout and carries a
+   * title and a body placeholder. Without R7 the package ships no layout, so
+   * the slide is a clone of the first one and carries the plain title shape the
+   * clone started with; the tests below that address a layout placeholder are
+   * gated with `requiresR7`.
+   */
   async function twoSlideDeck(name) {
     const target = path.join(tmpDir, name)
     await engine.create(target, { overwrite: true, title: 'Годовой отчёт 2026' })
-    await engine.addSlide(target, {
+    await addSlideAnywhere(engine, target, {
       layoutType: 'obj',
       title: 'Ключевые выводы',
       paragraphs: [{ text: 'Первый пункт', bullet: true }]
     })
     return target
+  }
+
+  /**
+   * An object on the slide whose text can be restyled.
+   *
+   * The layout's body placeholder on a machine with R7; the plain shape the
+   * fallback's cloned slide carries otherwise. The tests that use this assert
+   * on shape bookkeeping, not on the placeholder, so either will do.
+   */
+  function textObjectOf(slide) {
+    return slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
+      || slide.slide.objects.find((o) => o.onSlide && o.type === 'shape')
   }
 
   /** Every top-level object of a slide, as markup. */
@@ -76,7 +97,9 @@ describe('PPTX structural integrity', () => {
 
   // ------------------------------------------------- locating, not duplicating
 
-  test('writing text into the title-slide subtitle keeps one subTitle shape', async () => {
+  test('writing text into the title-slide subtitle keeps one subTitle shape', async (t) => {
+    // The subTitle placeholder belongs to R7's title layout.
+    if (requiresR7(t)) return
     const target = await twoSlideDeck('subtitle.pptx')
     const before = await engine.readSlide(target, 0)
     const subtitle = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'subTitle')
@@ -100,7 +123,9 @@ describe('PPTX structural integrity', () => {
     )
   })
 
-  test('replacing the paragraphs of a body placeholder keeps one shape per placeholder', async () => {
+  test('replacing the paragraphs of a body placeholder keeps one shape per placeholder', async (t) => {
+    // It asserts on the placeholder contract (`p:ph`), which needs a layout.
+    if (requiresR7(t)) return
     const target = await twoSlideDeck('body.pptx')
     const before = await engine.readSlide(target, 1)
     const body = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
@@ -145,7 +170,7 @@ describe('PPTX structural integrity', () => {
     const countBefore = (await shapeElements(target, 1)).length
     for (const text of ['Раз', 'Два', 'Три']) {
       const slide = await engine.readSlide(target, 1)
-      const body = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
+      const body = textObjectOf(slide)
       await engine.formatObject(target, { slideIndex: 1, objectId: body.id, text })
     }
     assert.equal((await shapeElements(target, 1)).length, countBefore, 'three edits, still one body shape')
@@ -156,7 +181,7 @@ describe('PPTX structural integrity', () => {
   test('validateStructure is clean on a deck built through the public API', async () => {
     const target = await twoSlideDeck('clean.pptx')
     const slide = await engine.readSlide(target, 1)
-    const body = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
+    const body = textObjectOf(slide)
     await engine.formatObject(target, { slideIndex: 1, objectId: body.id, text: 'Проверка' })
     await engine.addShape(target, {
       slideIndex: 1, shape: 'rounded-rectangle', name: 'Плашка',
@@ -174,7 +199,9 @@ describe('PPTX structural integrity', () => {
     }
   })
 
-  test('validateStructure reports a duplicated shape and a duplicated placeholder', async () => {
+  test('validateStructure reports a duplicated shape and a duplicated placeholder', async (t) => {
+    // A duplicate-placeholder error needs a layout placeholder to duplicate.
+    if (requiresR7(t)) return
     const target = await twoSlideDeck('duplicated.pptx')
     const corrupt = path.join(tmpDir, 'duplicated-corrupt.pptx')
     const zip = await ZipArchive.fromFile(target)
@@ -204,7 +231,9 @@ describe('PPTX structural integrity', () => {
     assert.equal(slideReport.duplicatePlaceholders.length, 1)
   })
 
-  test('validateStructure rejects id 0 and a shape that reuses the group id', async () => {
+  test('validateStructure rejects id 0 and a shape that reuses the group id', async (t) => {
+    // It rewrites the shape ids R7's content layout happens to assign.
+    if (requiresR7(t)) return
     const target = await twoSlideDeck('badids.pptx')
     const zeroed = path.join(tmpDir, 'zero-id.pptx')
     const regrouped = path.join(tmpDir, 'group-id.pptx')
@@ -255,7 +284,9 @@ describe('PPTX structural integrity', () => {
 
   // ------------------------------------------------------------ title sizing
 
-  test('a title written with text carries normAutofit', async () => {
+  test('a title written with text carries normAutofit', async (t) => {
+    // The title placeholder and the box it inherits come from R7's layout.
+    if (requiresR7(t)) return
     const target = await twoSlideDeck('autofit.pptx')
     const slide = await engine.readSlide(target, 1)
     const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
@@ -275,7 +306,8 @@ describe('PPTX structural integrity', () => {
     assert.doesNotMatch(titleShape, /<a:xfrm>/, 'the title must not write a transform')
   })
 
-  test('a title cannot be inflated by body-level paragraph spacing', async () => {
+  test('a title cannot be inflated by body-level paragraph spacing', async (t) => {
+    if (requiresR7(t)) return
     const target = await twoSlideDeck('title-spacing.pptx')
     const slide = await engine.readSlide(target, 1)
     const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
@@ -300,7 +332,9 @@ describe('PPTX structural integrity', () => {
     assert.match(titleShape, /<a:normAutofit\/>/, 'the renderer is still told to fit the text')
   })
 
-  test('a long Cyrillic title fits inside the placeholder box it inherits', async () => {
+  test('a long Cyrillic title fits inside the placeholder box it inherits', async (t) => {
+    // The box being measured is the layout's title placeholder.
+    if (requiresR7(t)) return
     const target = await twoSlideDeck('long-title.pptx')
     const longTitle = 'Итоги года, ключевые показатели и планы на следующий период развития'
     const slide = await engine.readSlide(target, 1)
@@ -343,7 +377,9 @@ describe('PPTX structural integrity', () => {
 
   // ------------------------------------------------------- materialising
 
-  test('a placeholder materialised from the layout gets a fresh shape id', async () => {
+  test('a placeholder materialised from the layout gets a fresh shape id', async (t) => {
+    // Materialising is defined against a layout placeholder, so it needs R7.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'materialise.pptx')
     await engine.create(target, { overwrite: true, title: 'Материализация' })
     await engine.addSlide(target, { layoutType: 'titleOnly', title: 'Заголовок' })

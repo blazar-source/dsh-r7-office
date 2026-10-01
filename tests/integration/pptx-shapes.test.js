@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { PptxEngine } from '../../src/r7/pptx.js'
 import { ZipArchive } from '../../src/shared/zip.js'
-import { R7Adapter } from '../../src/r7/adapter.js'
-import { tempDir, writeGradientPng, writeSolidPng } from './helpers/pptx-fixtures.js'
+import { requiresR7, HAS_R7_TEMPLATES } from '../helpers/r7-gate.js'
+import { tempDir, writeGradientPng, writeSolidPng, addSlideAnywhere, clearSlide } from './helpers/pptx-fixtures.js'
 
 /**
  * Shapes, fills, strokes, z-order and images.
@@ -16,12 +16,9 @@ import { tempDir, writeGradientPng, writeSolidPng } from './helpers/pptx-fixture
 describe('PPTX shapes, paint and images', () => {
   const tmpDir = tempDir('pptx_shapes')
   let engine
-  let r7Available = false
 
-  before(async () => {
+  before(() => {
     engine = new PptxEngine()
-    const info = await new R7Adapter().detect()
-    r7Available = info.installed
   })
 
   after(() => {
@@ -47,11 +44,20 @@ describe('PPTX shapes, paint and images', () => {
     })
   }
 
-  /** A one-slide deck on a blank layout, so shapes are the only objects. */
+  /**
+   * A one-slide deck whose second slide starts empty, so shapes are the only
+   * objects on it.
+   *
+   * With R7 the second slide is built on the template's blank layout. Without
+   * R7 the package carries no layouts, so the engine can only clone the first
+   * slide; the clone is stripped of the title shape it inherits so the test
+   * still sees nothing but what it added.
+   */
   async function blankDeck(name) {
     const target = path.join(tmpDir, name)
     await engine.create(target, { overwrite: true, title: 'Фигуры' })
-    await engine.addSlide(target, { layoutType: 'blank' })
+    await addSlideAnywhere(engine, target, { layoutType: 'blank' })
+    if (!HAS_R7_TEMPLATES) await clearSlide(engine, target, 1)
     return target
   }
 
@@ -269,7 +275,10 @@ describe('PPTX shapes, paint and images', () => {
     assert.ok(slide.slide.objects.find((o) => o.id === keep.objectId), 'the other shape survives')
   })
 
-  test('removing an object that exists only in the layout is refused, not guessed', async () => {
+  test('removing an object that exists only in the layout is refused, not guessed', async (t) => {
+    // Its subject is the layout graph: the placeholder lives on a real R7
+    // layout, and without one the slide inherits nothing to refuse.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'layout-only.pptx')
     await engine.create(target, { overwrite: true, title: 'Только заголовок' })
     await engine.addSlide(target, { layoutType: 'titleOnly', title: 'Заголовок' })
@@ -282,7 +291,9 @@ describe('PPTX shapes, paint and images', () => {
     )
   })
 
-  test('styling a layout-only placeholder materialises it on the slide', async () => {
+  test('styling a layout-only placeholder materialises it on the slide', async (t) => {
+    // Materialising is defined against a layout placeholder, so it needs R7.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'materialise.pptx')
     await engine.create(target, { overwrite: true, title: 'Материализация' })
     await engine.addSlide(target, { layoutType: 'titleOnly', title: 'Заголовок' })
@@ -467,10 +478,7 @@ describe('PPTX shapes, paint and images', () => {
   })
 
   test('the deck with shapes and an image renders to PDF in R7', async (t) => {
-    if (!r7Available) {
-      t.skip('R7-Office installation not available on this host')
-      return
-    }
+    if (requiresR7(t)) return
     const target = await blankDeck('render-shapes.pptx')
     await engine.addShape(target, {
       slideIndex: 1, shape: 'rounded-rectangle', x: 500000, y: 500000, width: 3000000, height: 1500000,

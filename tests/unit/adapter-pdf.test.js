@@ -70,15 +70,22 @@ test('defaultAllFontsCandidates honours R7_ALL_FONTS_JS first', () => {
 })
 
 test('defaultAllFontsCandidates looks in the Windows user profile and the install', () => {
+  // The candidate builder uses the HOST path module, so the expected values are
+  // built the same way: a hard-coded `C:\...\AllFonts.js` string only matches on
+  // a Windows host and fails on the Linux/macOS CI runners.
   const candidates = defaultAllFontsCandidates(
     { LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local', APPDATA: 'C:\\Users\\u\\AppData\\Roaming' },
     'win32',
     'C:\\Program Files\\R7-Office\\Editors-1'
   )
-  assert.ok(candidates.includes('C:\\Users\\u\\AppData\\Local\\R7-Office\\Editors\\data\\fonts\\AllFonts.js'))
-  assert.ok(candidates.includes('C:\\Users\\u\\AppData\\Roaming\\R7-Office\\Editors\\data\\fonts\\AllFonts.js'))
-  assert.ok(candidates.includes('C:\\Program Files\\R7-Office\\Editors-1\\data\\fonts\\AllFonts.js'))
-  assert.ok(candidates.includes('C:\\Program Files\\R7-Office\\Editors-1\\editors\\sdkjs\\common\\AllFonts.js'))
+  assert.ok(candidates.includes(
+    path.join('C:\\Users\\u\\AppData\\Local', 'R7-Office', 'Editors', 'data', 'fonts', 'AllFonts.js')))
+  assert.ok(candidates.includes(
+    path.join('C:\\Users\\u\\AppData\\Roaming', 'R7-Office', 'Editors', 'data', 'fonts', 'AllFonts.js')))
+  assert.ok(candidates.includes(
+    path.join('C:\\Program Files\\R7-Office\\Editors-1', 'data', 'fonts', 'AllFonts.js')))
+  assert.ok(candidates.includes(
+    path.join('C:\\Program Files\\R7-Office\\Editors-1', 'editors', 'sdkjs', 'common', 'AllFonts.js')))
 })
 
 test('defaultAllFontsCandidates uses XDG-style paths on Linux', () => {

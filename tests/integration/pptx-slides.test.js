@@ -4,9 +4,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { PptxEngine } from '../../src/r7/pptx.js'
 import { ZipArchive } from '../../src/shared/zip.js'
-import { R7Adapter } from '../../src/r7/adapter.js'
+import { requiresR7 } from '../helpers/r7-gate.js'
 import { readRelationships, slideLayouts, slideParts, resolvePartPath } from '../../src/r7/pptx-util.js'
-import { tempDir, injectChartAndSmartArt, sameBytes } from './helpers/pptx-fixtures.js'
+import { tempDir, injectChartAndSmartArt, sameBytes, addSlideAnywhere } from './helpers/pptx-fixtures.js'
 
 /**
  * Slide lifecycle, layout reuse and — the point of the whole exercise —
@@ -15,14 +15,9 @@ import { tempDir, injectChartAndSmartArt, sameBytes } from './helpers/pptx-fixtu
 describe('PPTX slides, layouts and preservation', () => {
   const tmpDir = tempDir('pptx_slides')
   let engine
-  let adapter
-  let r7Available = false
 
-  before(async () => {
+  before(() => {
     engine = new PptxEngine()
-    adapter = new R7Adapter()
-    const info = await adapter.detect()
-    r7Available = info.installed
   })
 
   after(() => {
@@ -39,11 +34,17 @@ describe('PPTX slides, layouts and preservation', () => {
     await assert.rejects(() => engine.create(target, { title: 'Второй' }), /Refusing to overwrite/)
     await engine.create(target, { title: 'Третий', overwrite: true })
     const slide = await engine.readSlide(target, 0)
+    // With R7 the title is a placeholder declared by the title layout; the
+    // synthetic package has no layout, so the title is the plain shape it
+    // starts with. Both carry the text the last create() was given.
     const title = slide.slide.objects.find((o) => o.placeholder && (o.placeholder.type === 'ctrTitle' || o.placeholder.type === 'title'))
+      || slide.slide.objects.find((o) => o.name === 'Title')
     assert.equal(title.text, 'Третий')
   })
 
-  test('adding a slide builds it on a real layout of the deck and registers every part', async () => {
+  test('adding a slide builds it on a real layout of the deck and registers every part', async (t) => {
+    // Its subject is the layout graph and the slide's layout relationship.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'add.pptx')
     await engine.create(target, { title: 'Заголовок' })
 
@@ -83,7 +84,9 @@ describe('PPTX slides, layouts and preservation', () => {
     )
   })
 
-  test('the layout is chosen by index, name and type, and a bad name is rejected', async () => {
+  test('the layout is chosen by index, name and type, and a bad name is rejected', async (t) => {
+    // Layout lookup by index, name and type only exists with R7's layouts.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'layout-choice.pptx')
     await engine.create(target, { title: 'Заголовок' })
     const layouts = await engine.listLayouts(target)
@@ -103,7 +106,9 @@ describe('PPTX slides, layouts and preservation', () => {
     await assert.rejects(() => engine.addSlide(target, { layoutIndex: 99 }), /Layout index 99 not found/)
   })
 
-  test('a slide added on a title layout gets title and subtitle placeholders', async () => {
+  test('a slide added on a title layout gets title and subtitle placeholders', async (t) => {
+    // The ctrTitle and subTitle placeholders come from R7's title layout.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'title-slide.pptx')
     await engine.create(target, { title: 'Заголовок' })
     const added = await engine.addSlide(target, {
@@ -121,7 +126,9 @@ describe('PPTX slides, layouts and preservation', () => {
     assert.equal(subtitle.text, 'Подзаголовок презентации')
   })
 
-  test('a deck built only on blank layouts has no content placeholders', async () => {
+  test('a deck built only on blank layouts has no content placeholders', async (t) => {
+    // "Blank layout" is an R7 template concept.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'blank.pptx')
     await engine.create(target, { title: 'Заголовок' })
     await engine.addSlide(target, { layoutType: 'blank' })
@@ -133,7 +140,9 @@ describe('PPTX slides, layouts and preservation', () => {
     assert.equal(content.length, 0, 'a blank slide starts empty')
   })
 
-  test('deleting a slide removes its parts and keeps the others valid', async () => {
+  test('deleting a slide removes its parts and keeps the others valid', async (t) => {
+    // The four slides are built on layouts and addressed by their placeholders.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'delete.pptx')
     await engine.create(target, { title: 'Слайд 1' })
     await engine.addSlide(target, { layoutType: 'obj', title: 'Слайд 2' })
@@ -170,10 +179,7 @@ describe('PPTX slides, layouts and preservation', () => {
   })
 
   test('deleting a slide that has notes removes the notes part too', async (t) => {
-    if (!r7Available) {
-      t.skip('R7-Office installation not available on this host')
-      return
-    }
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'delete-notes.pptx')
     await engine.create(target, { title: 'С заметками' })
     await engine.addSlide(target, { layoutType: 'obj', title: 'Второй' })
@@ -195,7 +201,10 @@ describe('PPTX slides, layouts and preservation', () => {
     assert.equal((await engine.readSlide(target, 0)).slideCount, 1)
   })
 
-  test('duplicating a slide gives the copy fresh shape ids and no notes', async () => {
+  test('duplicating a slide gives the copy fresh shape ids and no notes', async (t) => {
+    // The duplicate is expected to keep the source slide's layout link, which
+    // only a layout-bearing deck has.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'duplicate.pptx')
     await engine.create(target, { title: 'Оригинал' })
     await engine.addSlide(target, { layoutType: 'obj', title: 'Копируемый', paragraphs: ['Текст'] })
@@ -225,7 +234,9 @@ describe('PPTX slides, layouts and preservation', () => {
     assert.equal((await engine.validate(target)).valid, true)
   })
 
-  test('moving and reordering slides changes only the presentation order', async () => {
+  test('moving and reordering slides changes only the presentation order', async (t) => {
+    // The slides are built on layouts and told apart by their placeholder title.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'reorder.pptx')
     await engine.create(target, { title: 'A' })
     await engine.addSlide(target, { layoutType: 'obj', title: 'B' })
@@ -259,7 +270,8 @@ describe('PPTX slides, layouts and preservation', () => {
     assert.deepEqual(titles, ['C', 'A', 'B'])
   })
 
-  test('reorderSlides accepts a full permutation and rejects a bad one', async () => {
+  test('reorderSlides accepts a full permutation and rejects a bad one', async (t) => {
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'permutation.pptx')
     await engine.create(target, { title: 'A' })
     await engine.addSlide(target, { layoutType: 'obj', title: 'B' })
@@ -280,7 +292,10 @@ describe('PPTX slides, layouts and preservation', () => {
   test('a slide can be cloned from an existing slide instead of a layout', async () => {
     const target = path.join(tmpDir, 'clone.pptx')
     await engine.create(target, { title: 'Источник' })
-    await engine.addSlide(target, { layoutType: 'obj', title: 'Шаблон', paragraphs: ['Строка'] })
+    // Slide 2 exists in either world: on R7's content layout, or — the fallback
+    // having no layouts — as a clone of slide 1. Cloning it again is the point
+    // of the test and needs no layout.
+    await addSlideAnywhere(engine, target, { layoutType: 'obj', title: 'Шаблон', paragraphs: ['Строка'] })
     const added = await engine.addSlide(target, { baseSlideIndex: 1 })
 
     const source = await engine.readSlide(target, 1)
@@ -290,7 +305,7 @@ describe('PPTX slides, layouts and preservation', () => {
       clone.slide.objects.filter((o) => o.onSlide).length,
       source.slide.objects.filter((o) => o.onSlide).length
     )
-    assert.equal(added.layout.partPath ?? source.slide.layout.partPath, source.slide.layout.partPath)
+    assert.equal(added.layout?.partPath ?? source.slide.layout.partPath, source.slide.layout.partPath)
   })
 
   test('an out-of-range slide index is refused everywhere, with the real count', async () => {
@@ -305,7 +320,10 @@ describe('PPTX slides, layouts and preservation', () => {
     )
   })
 
-  test('notes, master, theme and layouts are preserved by an edit', async () => {
+  test('notes, master, theme and layouts are preserved by an edit', async (t) => {
+    // It asserts on the parts R7's template contributes (master, layouts,
+    // theme, notes master, table styles), which the fallback does not have.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'preserve-deck.pptx')
     await engine.create(target, { title: 'Презентация' })
     await engine.addSlide(target, { layoutType: 'obj', title: 'Слайд два', paragraphs: ['Текст'] })
@@ -349,7 +367,10 @@ describe('PPTX slides, layouts and preservation', () => {
   test('a chart, a SmartArt graphic frame and an embedded object survive an edit', async () => {
     const target = path.join(tmpDir, 'chart-smartart.pptx')
     await engine.create(target, { title: 'С диаграммой' })
-    await engine.addSlide(target, { layoutType: 'obj', title: 'Данные', paragraphs: ['Строка'] })
+    // The second slide only has to exist and to carry an editable object: the
+    // preservation of the injected chart and SmartArt frame does not depend on
+    // which layout the engine built it from.
+    await addSlideAnywhere(engine, target, { layoutType: 'obj', title: 'Данные', paragraphs: ['Строка'] })
 
     const descriptors = slideParts(await ZipArchive.fromFile(target))
     const slidePart = descriptors[1].partPath
@@ -371,6 +392,7 @@ describe('PPTX slides, layouts and preservation', () => {
 
     // Change the text of one object and add another.
     const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
+      || slide.slide.objects.find((o) => o.onSlide && o.type === 'shape')
     await engine.formatObject(target, { slideIndex: 1, objectId: title.id, text: 'Изменённый заголовок', bold: true })
     await engine.addShape(target, {
       slideIndex: 1, shape: 'ellipse', x: 100000, y: 100000, width: 300000, height: 300000, fill: '#00AA00'
@@ -398,10 +420,7 @@ describe('PPTX slides, layouts and preservation', () => {
   })
 
   test('the chart deck still renders in R7 after the edit', async (t) => {
-    if (!r7Available) {
-      t.skip('R7-Office installation not available on this host')
-      return
-    }
+    if (requiresR7(t)) return
     const source = path.join(tmpDir, 'render-chart.pptx')
     await engine.create(source, { title: 'Диаграмма' })
     await engine.addSlide(source, { layoutType: 'obj', title: 'Данные', paragraphs: ['Строка'] })
@@ -434,7 +453,7 @@ describe('PPTX slides, layouts and preservation', () => {
   test('deleting a slide leaves the media other slides use in place', async () => {
     const target = path.join(tmpDir, 'shared-media.pptx')
     await engine.create(target, { title: 'Медиа' })
-    await engine.addSlide(target, { layoutType: 'obj', title: 'С картинкой' })
+    await addSlideAnywhere(engine, target, { layoutType: 'obj', title: 'С картинкой' })
     const { writeGradientPng } = await import('./helpers/pptx-fixtures.js')
     const png = writeGradientPng(path.join(tmpDir, 'shared.png'), 120, 90)
     const added = await engine.addImage(target, { slideIndex: 1, imagePath: png.filePath, x: 0, y: 0, width: 1000000 })
@@ -459,7 +478,7 @@ describe('PPTX slides, layouts and preservation', () => {
   test('a dangling slide relationship is reported by validate and dropped by the reader', async () => {
     const target = path.join(tmpDir, 'broken-rel.pptx')
     await engine.create(target, { title: 'A' })
-    await engine.addSlide(target, { layoutType: 'obj', title: 'B' })
+    await addSlideAnywhere(engine, target, { layoutType: 'obj', title: 'B' })
 
     const zip = await ZipArchive.fromFile(target)
     // Point the second slide relationship at a part that does not exist.
@@ -481,7 +500,9 @@ describe('PPTX slides, layouts and preservation', () => {
     await assert.rejects(() => engine.readSlide(target, 1), /Slide part not found/)
   })
 
-  test('every layout the deck reports can actually host a slide', async () => {
+  test('every layout the deck reports can actually host a slide', async (t) => {
+    // Its whole subject is the set of layouts the R7 template ships.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'every-layout.pptx')
     await engine.create(target, { title: 'Макеты' })
     const { layouts } = await engine.listLayouts(target)
@@ -501,10 +522,7 @@ describe('PPTX slides, layouts and preservation', () => {
   })
 
   test('the whole deck with every layout renders in R7', async (t) => {
-    if (!r7Available) {
-      t.skip('R7-Office installation not available on this host')
-      return
-    }
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'all-layouts-render.pptx')
     await engine.create(target, { title: 'Макеты' })
     const { layouts } = await engine.listLayouts(target)
@@ -517,7 +535,10 @@ describe('PPTX slides, layouts and preservation', () => {
     assert.ok(fs.statSync(pdfPath).size > 5000, 'a multi-page PDF was produced')
   })
 
-  test('the engine never rewrites a part it was not asked to change, across a full workflow', async () => {
+  test('the engine never rewrites a part it was not asked to change, across a full workflow', async (t) => {
+    // It addresses a shape by the id R7's content layout assigns and checks the
+    // slide's layout relationship, so it needs the template.
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'workflow.pptx')
     await engine.create(target, { title: 'Исходный заголовок' })
     await engine.addSlide(target, { layoutType: 'obj', title: 'Раздел', paragraphs: ['Пункт'] })

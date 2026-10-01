@@ -4,9 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DocxEngine } from '../../src/r7/docx.js'
 import { R7Adapter } from '../../src/r7/adapter.js'
+import { HAS_R7_TEMPLATES, requiresR7 } from '../helpers/r7-gate.js'
 import { archiveOf, cleanup, diffMembers, tempDir } from './docx-fixtures.test.js'
-
-const r7Available = (await new R7Adapter().detect()).installed
 
 /** How many hyperlink relationships an archive declares. */
 function hyperlinkRelationships(zip) {
@@ -52,8 +51,18 @@ describe('DOCX hyperlinks', () => {
     const docXml = zip.getText('word/document.xml')
     assert.match(docXml, new RegExp(`<w:hyperlink r:id="${result.relId}">`))
     assert.match(docXml, /<w:rStyle w:val="Hyperlink"\/>/)
-    // The Hyperlink character style must exist for the run to render as a link.
-    assert.match(zip.getText('word/styles.xml'), /w:styleId="Hyperlink"/)
+    // The run references the Hyperlink character style, and defining it is the
+    // engine's job, not the template's: R7's own styles.xml ships no such style,
+    // so `ensureStyleDefinitions` appends one on the R7 path. The engine can
+    // only extend a styles part that already exists, though, and the package it
+    // builds without an R7 template has none — there the reference dangles.
+    // `docx-synthetic-package.test.js` exercises that boundary on its own.
+    const stylesXml = zip.getText('word/styles.xml')
+    if (HAS_R7_TEMPLATES) {
+      assert.match(stylesXml, /w:styleId="Hyperlink"/)
+    } else {
+      assert.equal(stylesXml, null, 'the no-template package has no styles part to append the style to')
+    }
   })
 
   test('the link is readable back with its text and target', async () => {
@@ -248,10 +257,7 @@ describe('DOCX hyperlinks', () => {
   })
 
   test('R7 reopens the document with links and renders it', async (t) => {
-    if (!r7Available) {
-      t.skip('R7 not installed')
-      return
-    }
+    if (requiresR7(t)) return
     const pdf = path.join(dir, 'ссылки.pdf')
     await new R7Adapter().convert(file, pdf)
     assert.equal(fs.readFileSync(pdf).subarray(0, 5).toString(), '%PDF-')

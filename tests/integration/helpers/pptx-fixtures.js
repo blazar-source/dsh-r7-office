@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import zlib from 'node:zlib'
+import { R7_AVAILABLE } from '../../helpers/r7-gate.js'
 
 /**
  * Test support shared by the PPTX suites.
@@ -101,6 +102,51 @@ export function writeSolidPng(filePath, [r, g, b], width = 100, height = 80) {
   const png = makePng(width, height, () => [r, g, b])
   fs.writeFileSync(filePath, png)
   return { filePath, width, height, bytes: png.length }
+}
+
+/**
+ * Append a slide in whichever way this host can support.
+ *
+ * With R7 installed the engine builds the slide on one of the template's
+ * layouts, which is the normal path and the one the caller's options describe.
+ * Without R7 the package the engine falls back to ships no slide layout at all,
+ * so the only slide it can produce is a clone of an existing one — the
+ * documented `baseSlideIndex` path. Either way the deck gains one more real
+ * slide part, which is all a test about *objects* needs; a test about the
+ * layout graph itself must be gated with `requiresR7` instead of using this.
+ *
+ * @param {import('../../../src/r7/pptx.js').PptxEngine} engine
+ * @param {string} filePath
+ * @param {object} [options] options for the R7 path; `baseSlideIndex` selects
+ *   the clone source in the fallback
+ * @returns {Promise<object>} the engine's addSlide result
+ */
+export async function addSlideAnywhere(engine, filePath, options = {}) {
+  if (R7_AVAILABLE) return engine.addSlide(filePath, options)
+  const { baseSlideIndex = 0, outputPath, position } = options
+  const passthrough = {}
+  if (outputPath !== undefined) passthrough.outputPath = outputPath
+  if (position !== undefined) passthrough.position = position
+  return engine.addSlide(filePath, { baseSlideIndex, ...passthrough })
+}
+
+/**
+ * Take every object off a slide, leaving the shape tree empty.
+ *
+ * Used with `addSlideAnywhere` on a host without R7, where the added slide is a
+ * clone that still carries the source slide's shapes. On a machine with R7 this
+ * is a no-op for a slide that was built on a blank layout.
+ *
+ * @param {import('../../../src/r7/pptx.js').PptxEngine} engine
+ * @param {string} filePath
+ * @param {number} slideIndex
+ */
+export async function clearSlide(engine, filePath, slideIndex) {
+  const slide = await engine.readSlide(filePath, slideIndex)
+  for (const object of slide.slide.objects.filter((o) => o.onSlide)) {
+    await engine.removeObject(filePath, { slideIndex, objectId: object.id })
+  }
+  return filePath
 }
 
 /**

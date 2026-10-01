@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-01
+
+**Fix CI behavior on systems without R7-Office; no functional changes.**
+
+No engine, tool or conversion behaviour changed. The test suite now states what
+it needs instead of assuming it. Full notes:
+[docs/release-notes/v0.1.1.md](docs/release-notes/v0.1.1.md).
+
+### Fixed
+- `npm test` now passes on a machine without R7-Office. It previously reported
+  about 64 failures there, including on every GitHub Actions runner, because
+  ordinary tests asserted values that come from R7's own templates — page size,
+  margins, style ids, the slide-layout graph — and failed instead of skipping
+  when no template was present.
+- `tests/unit/adapter-pdf.test.js` compared font-list candidates against
+  hard-coded `C:\...` strings while the code builds them with the **host** path
+  module, so it could not pass on Linux or macOS. This failed for an unrelated
+  reason and would not have been caught by changing only whether R7 is present.
+- `tests/integration/docx-sections.test.js` required `</w:sectPr></w:body>` with
+  no whitespace between the tags, which R7's template happens to satisfy and the
+  synthetic package does not.
+- `tests/integration/xlsx-format.test.js` and `xlsx-pdf.test.js` named parts
+  that only exist in an R7-authored workbook when asserting byte preservation.
+
+### Added
+- `tests/helpers/r7-gate.js` — one place deciding whether a test may run, with
+  `requiresR7(t)` so a skip always names its reason. A template can no longer be
+  a silent precondition of an ordinary test.
+- `npm run test:r7` — the R7-dependent run. It **refuses** to start without an
+  installed R7-Office rather than skipping everything and reporting success,
+  then runs the whole suite with nothing skipped plus the live desktop bridge.
+- `R7_OFFICE_DISABLED=1` — makes detection report no installation even where one
+  exists, so the condition CI runs under is reproducible on a developer machine
+  and the fallback paths stay covered.
+- Synthetic-package suites for DOCX and PPTX, which force the fallback on any
+  host and run in both worlds.
+- CI now sets that flag explicitly and asserts the property rather than the exit
+  code: a floor on the number that passed, no failures, and a skip count present
+  in the summary.
+
+### Known limitations
+- The container packages the engines build without an R7 template are minimal.
+  The DOCX one has no `word/styles.xml`, so styles the engine names — including
+  `Hyperlink` — are not defined; the PPTX one has no slide layout, master or
+  theme, so `addSlide()` on a layout is refused and only
+  `addSlide({ baseSlideIndex })` works. Both were already true and are now pinned
+  by tests rather than left implicit. Functionality is unchanged in this release.
+
 ## [0.1.0] - 2026-10-01
 
 The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/release-notes/v0.1.0.md).
@@ -229,4 +277,5 @@ The first public release. Full notes: [docs/release-notes/v0.1.0.md](docs/releas
 - The automated live desktop test is verified on Windows only.
 
 [0.1.0]: https://github.com/blazar-source/dsh-r7-office/releases/tag/v0.1.0
+[0.1.1]: https://github.com/blazar-source/dsh-r7-office/releases/tag/v0.1.1
 

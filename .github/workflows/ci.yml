@@ -34,8 +34,43 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run the test suite
-        run: npm test
+      # No runner has R7-Office (it is proprietary and cannot be installed
+      # here), so the suite must pass with the R7-dependent tests SKIPPED and
+      # say so. Setting the flag makes that condition explicit and deterministic
+      # rather than an accident of what a runner happens to have, and the
+      # assertions below turn "passed because everything skipped" into a
+      # failure. --test-reporter=tap keeps the summary greppable.
+      - name: Run the portable test suite (no R7-Office installed)
+        shell: bash
+        env:
+          R7_OFFICE_DISABLED: '1'
+        run: |
+          set -o pipefail
+          node --test --test-reporter=tap "tests/**/*.test.js" | tee /tmp/r7-test.log
+          status=$?
+          echo "--- summary ---"
+          grep -E "^# (tests|pass|fail|skipped)" /tmp/r7-test.log || true
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the portable suite exited $status"
+            exit 1
+          fi
+          if grep -qE "^# fail [1-9]" /tmp/r7-test.log; then
+            echo "::error::the portable suite has failures"
+            exit 1
+          fi
+          # A floor on the number that PASSED, rather than a requirement that
+          # something skipped: it catches "green because nothing ran", and it
+          # will not misfire if the R7-dependent set ever shrinks to nothing.
+          passed=$(grep -E "^# pass [0-9]+" /tmp/r7-test.log | awk '{print $3}')
+          if [ -z "$passed" ] || [ "$passed" -lt 250 ]; then
+            echo "::error::only ${passed:-0} tests passed — the suite did not really run"
+            exit 1
+          fi
+          if ! grep -qE "^# skipped [0-9]+" /tmp/r7-test.log; then
+            echo "::error::the skip count is missing from the summary"
+            exit 1
+          fi
 
       - name: Verify the MCP server answers a raw JSON-RPC call
         shell: bash

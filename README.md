@@ -87,10 +87,38 @@ npm install
 npm test
 ```
 
-`npm test` runs 445 tests: pure unit tests, OOXML round-trip regression tests,
-file end-to-end workflows, security-policy tests and an external MCP client
-smoke suite. Tests that need an R7-Office installation **skip themselves** with
-a clear message instead of failing, so a clean machine gets a green run.
+`npm test` is the **portable** suite and needs nothing but Node: unit tests,
+OOXML round-trip regression tests, file end-to-end workflows, security-policy
+tests and an external MCP client smoke suite. Tests whose subject is the
+installed product — R7's own templates, the `x2t` converter, the desktop editor
+— **skip themselves** with a stated reason instead of failing, so a machine
+that has never seen R7-Office gets a green run and a visible skip count.
+
+```bash
+$ npm test
+# tests 469
+# pass 390
+# fail 0
+# skipped 79
+```
+
+The R7-dependent tests are only meaningful where R7-Office is installed, so
+they get their own command, which **refuses to run without it** rather than
+skipping everything and reporting success:
+
+```bash
+# Requires an installed R7-Office. Runs the whole suite with nothing skipped,
+# then drives the live desktop editor over CDP and saves a document for real.
+npm run test:r7
+
+# Just the suite, or just the live editor, if you want them separately:
+npm run test:r7 -- --suite
+npm run test:r7 -- --live
+```
+
+To see what the portable suite does on a machine without R7 even though you
+have one installed, set `R7_OFFICE_DISABLED=1` — detection then reports no
+installation, which is exactly the condition CI runs under.
 
 Then verify the integration you actually intend to use:
 
@@ -415,11 +443,12 @@ vulnerability.
 ## Development
 
 ```bash
-npm test              # everything
+npm test              # the portable suite; needs only Node, R7 tests skip
 npm run test:unit
 npm run test:integration
 npm run test:e2e
-npm run test:live     # needs R7-Office installed
+npm run test:r7       # requires R7-Office: full suite + the live desktop editor
+npm run test:live     # just the live desktop bridge (needs R7-Office)
 npm run test:harness  # boots a fresh DeepSeek Harness
 npm run inspect:r7    # CDP probe of a running R7 Desktop
 ```

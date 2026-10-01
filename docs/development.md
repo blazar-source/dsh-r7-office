@@ -26,14 +26,50 @@ npm test
 | `tests/e2e/` | Full file workflows through the MCP tool surface, the desktop bridge wire protocol, and the external MCP client smoke suite |
 
 ```bash
-npm test                 # everything
+npm test                 # the portable suite
 npm run test:unit
 npm run test:integration
 npm run test:e2e
+npm run test:r7          # requires R7-Office
 ```
 
-Tests that need R7-Office skip themselves with a clear message, so a machine
-without it still gets a green run.
+### Two groups, and the rule between them
+
+Every test belongs to exactly one group, and the split is a **test-classification
+decision**, not a convenience:
+
+- **Portable.** Runs on any machine with Node and must pass there. It may use
+  the synthetic package the engines build when no R7 template is available.
+- **R7-dependent.** Its subject is the installed product: R7's own template
+  values, the `x2t` converter, or the desktop editor. It must **skip** when R7
+  is absent, naming the reason.
+
+Use the gate in `tests/helpers/r7-gate.js` so the decision is explicit and the
+skip message says why:
+
+```js
+import { requiresR7 } from '../helpers/r7-gate.js'
+
+test('the workbook renders every sheet to a page', async (t) => {
+  if (requiresR7(t)) return
+  ...
+})
+```
+
+**A template must never be a silent precondition of an ordinary test.** If a
+portable test only passes because R7 happens to be installed, it is in the wrong
+group or it is asserting something that belongs to the R7 suite — a real defect
+either way, because CI has no R7 and would go red. When adding a test, ask which
+group it is in *before* writing the assertion.
+
+`npm run test:r7` is the other half: it **refuses** to run without an
+installation, then runs the full suite with nothing skipped plus the live
+desktop bridge. A run that skipped everything would look like success while
+proving nothing, so it fails loudly instead.
+
+To reproduce CI's condition on a machine that *does* have R7, set
+`R7_OFFICE_DISABLED=1`. Detection then reports no installation, which is exactly
+what a CI runner looks like — and what `npm test` must stay green under.
 
 ## Verification beyond the test suite
 

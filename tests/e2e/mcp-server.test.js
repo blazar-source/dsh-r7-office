@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { R7McpServer } from '../../src/mcp/server.js'
+import { requiresR7 } from '../helpers/r7-gate.js'
 
 describe('R7McpServer End-to-End', () => {
   const tmpDir = path.join(os.tmpdir(), `dsh_mcp_e2e_${Date.now()}`)
@@ -135,7 +136,10 @@ describe('R7McpServer End-to-End', () => {
     assert.equal(valData.valid, true)
   })
 
-  test('should convert via r7_convert MCP tool', async () => {
+  test('should convert via r7_convert MCP tool', async (t) => {
+    // r7_convert drives x2t, so without an R7 installation the tool itself is
+    // unavailable; the rest of this file (the tool surface) is portable.
+    if (requiresR7(t)) return
     const res = await server.handleMessage({
       jsonrpc: '2.0',
       id: 8,

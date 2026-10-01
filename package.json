@@ -1,6 +1,6 @@
 {
   "name": "dsh-r7-office",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "R7-Office (Р7-Офис) document processing plugin & MCP server for DeepSeek Harness (DOCX, XLSX, PPTX, PDF, Desktop Bridge)",
   "main": "src/plugin/index.js",
   "type": "module",
@@ -39,6 +39,7 @@
     "test:unit": "node --test \"tests/unit/**/*.test.js\"",
     "test:integration": "node --test \"tests/integration/**/*.test.js\"",
     "test:e2e": "node --test \"tests/e2e/**/*.test.js\"",
+    "test:r7": "node scripts/test-with-r7.mjs",
     "test:live": "node scripts/live-desktop-e2e.mjs",
     "test:harness": "node scripts/harness-smoke.mjs",
     "test:clean-install": "node scripts/clean-install-check.mjs",

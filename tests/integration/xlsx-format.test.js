@@ -16,6 +16,7 @@ import os from 'node:os'
 import { XlsxEngine } from '../../src/r7/xlsx.js'
 import { R7Adapter } from '../../src/r7/adapter.js'
 import { ZipArchive } from '../../src/shared/zip.js'
+import { requiresR7 } from '../helpers/r7-gate.js'
 import { Stylesheet, dateToSerial, serialToDate, normalizeArgb } from '../../src/r7/xlsx-styles.js'
 import {
   colToIndex,
@@ -42,12 +43,10 @@ import {
 const tmpDir = path.join(os.tmpdir(), `dsh_r7_xlsx_format_${Date.now()}`)
 const engine = new XlsxEngine()
 let adapter = null
-let r7Available = false
 
 before(async () => {
   fs.mkdirSync(tmpDir, { recursive: true })
   adapter = new R7Adapter()
-  r7Available = (await adapter.detect()).installed
 })
 
 after(() => {
@@ -738,6 +737,15 @@ describe('XLSX formatting', () => {
       assert.deepEqual(after.list(), expected, 'no member was added other than the styles part')
 
       const edited = new Set(['xl/worksheets/sheet1.xml', 'xl/styles.xml'])
+      if (!before.has('xl/styles.xml')) {
+        // Without the R7 template the package starts with no stylesheet at all,
+        // so the first format call also has to DECLARE the part it creates: the
+        // content types and the workbook relationships necessarily change with
+        // it. A templated workbook already names both of them, so there only the
+        // worksheet and the stylesheet move.
+        edited.add('[Content_Types].xml')
+        edited.add('xl/_rels/workbook.xml.rels')
+      }
       for (const name of before.list()) {
         assert.ok(after.has(name), `${name} is still there`)
         if (edited.has(name)) continue
@@ -893,7 +901,7 @@ describe('XLSX formatting', () => {
 
   describe('R7 round trip', () => {
     test('R7 opens and renders a formatted workbook', async (t) => {
-      if (!r7Available) { t.skip('R7-Office is not installed on this host'); return }
+      if (requiresR7(t)) return
 
       const book = copyTo('r7-render.xlsx')
       await engine.write(book, {
@@ -1057,7 +1065,7 @@ describe('write: formats and real dates', () => {
   })
 
   test('R7 accepts a workbook written with dates and formats', async (t) => {
-    if (!r7Available) { t.skip('R7-Office is not installed on this host'); return }
+    if (requiresR7(t)) return
     const book = copyTo('write-r7.xlsx')
     await engine.write(book, {
       sheetName: 'Данные',
@@ -1075,6 +1083,10 @@ describe('write: formats and real dates', () => {
 })
 
 describe('workbook without the R7 template', () => {
+  // The synthetic-package path, exercised ON PURPOSE on every host: the stub
+  // adapter answers `getTemplatePath` with null, so `create` builds the package
+  // itself even where R7-Office is installed. Nothing here may be gated on R7 —
+  // this is the group that keeps the no-template fallback honest.
   const stubAdapter = { getTemplatePath: async () => null }
   const standalone = new XlsxEngine(stubAdapter)
   const dir = path.join(tmpDir, 'standalone')
@@ -1113,6 +1125,88 @@ describe('workbook without the R7 template', () => {
     assert.equal(read.data[0][2], dateToSerial('2026-01-02'))
   })
 
+  test('page setup round-trips through setPageSetup, read and inspect', async () => {
+    const book = path.join(dir, 'layout.xlsx')
+    await standalone.create(book, {
+      sheets: [
+        { name: 'Данные', data: [['Категория', 'Сумма'], ['Маркетинг', 50000]] },
+        { name: 'Прочее', data: [['нетронуто', 7]] }
+      ]
+    })
+    const cellsBefore = await standalone.read(book, { sheetName: 'Данные', range: 'A1:B2' })
+
+    const result = await standalone.setPageSetup(book, {
+      sheetName: 'Данные',
+      orientation: 'landscape',
+      fitToWidth: 1,
+      fitToHeight: 0,
+      paperSize: 'A4',
+      margins: { left: 0.5, right: 0.5, top: 0.6, bottom: 0.6 },
+      printArea: 'A1:B2'
+    })
+
+    assert.equal(result.pageSetup.fitToPage, true, 'the sheet gained the fitToPage switch')
+    assert.equal(result.pageSetup.orientation, 'landscape')
+    assert.equal(result.pageSetup.paperSizeName, 'A4')
+    assert.equal(result.printArea, 'Данные!$A$1:$B$2')
+
+    const read = await standalone.read(book, { sheetName: 'Данные', includeStyles: true })
+    assert.equal(read.pageSetup.orientation, 'landscape')
+    assert.equal(read.pageSetup.fitToWidth, 1)
+    assert.equal(read.pageSetup.margins.left, 0.5)
+    assert.equal(read.printArea, 'Данные!$A$1:$B$2')
+    assert.deepEqual((await standalone.read(book, { sheetName: 'Данные', range: 'A1:B2' })).data, cellsBefore.data,
+      'the page setup did not move a single value')
+
+    const info = await standalone.inspect(book)
+    const sheet = info.sheets.find((s) => s.name === 'Данные')
+    assert.equal(sheet.pageSetup.paperSize, 9)
+    assert.equal(sheet.printArea, 'Данные!$A$1:$B$2')
+    assert.equal(info.sheets.find((s) => s.name === 'Прочее').printArea, null,
+      'a print area on one sheet is not reported for another')
+
+    const validation = await standalone.validate(book)
+    assert.equal(validation.valid, true, JSON.stringify(validation.errors))
+  })
+
+  test('an edit to the hand-built package leaves every other member byte-identical', async () => {
+    const base = path.join(dir, 'preserve-base.xlsx')
+    await standalone.create(base, {
+      sheets: [
+        { name: 'Лист1', data: [['A', 1]] },
+        { name: 'Лист2', data: [['B', 2]] }
+      ]
+    })
+    const before = await ZipArchive.fromFile(base)
+    assert.ok(!before.has('xl/styles.xml'), 'the synthetic package starts with no stylesheet')
+
+    const book = path.join(dir, 'preserve.xlsx')
+    fs.copyFileSync(base, book)
+    await standalone.format(book, {
+      range: 'A1:B1', font: { bold: true }, fill: { color: '#FFFF00' }, merge: true, rowHeight: 22
+    })
+
+    const after = await ZipArchive.fromFile(book)
+    // Registering the stylesheet the package did not have is the only reason a
+    // member other than the edited worksheet moves, and it adds exactly one.
+    const changed = after.list()
+      .filter((name) => !before.has(name) || !after.getBuffer(name).equals(before.getBuffer(name)))
+      .sort()
+    assert.deepEqual(changed, [
+      '[Content_Types].xml',
+      'xl/_rels/workbook.xml.rels',
+      'xl/styles.xml',
+      'xl/worksheets/sheet1.xml'
+    ])
+
+    for (const name of ['_rels/.rels', 'xl/workbook.xml', 'xl/worksheets/sheet2.xml']) {
+      assert.ok(after.getBuffer(name).equals(before.getBuffer(name)), `${name} must stay byte-identical`)
+    }
+
+    const validation = await standalone.validate(book)
+    assert.equal(validation.valid, true, JSON.stringify(validation.errors))
+  })
+
   test('formatting works on a self-closing sheetData', async () => {
     const book = path.join(dir, 'empty.xlsx')
     await standalone.create(book, { sheets: [{ name: 'Лист1', data: [] }] })
@@ -1132,8 +1226,7 @@ describe('workbook without the R7 template', () => {
   })
 
   test('R7 accepts the standalone workbook', async (t) => {
-    const adapter = new R7Adapter()
-    if (!(await adapter.detect()).installed) { t.skip('R7-Office is not installed on this host'); return }
+    if (requiresR7(t)) return
     const book = path.join(dir, 'fallback.xlsx')
     const pdf = path.join(dir, 'fallback.pdf')
     await adapter.convert(book, pdf)

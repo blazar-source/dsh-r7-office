@@ -4,9 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DocxEngine } from '../../src/r7/docx.js'
 import { R7Adapter } from '../../src/r7/adapter.js'
+import { requiresR7 } from '../helpers/r7-gate.js'
 import { archiveOf, cleanup, diffMembers, tempDir } from './docx-fixtures.test.js'
-
-const r7Available = (await new R7Adapter().detect()).installed
 
 /**
  * Scenario 2: page size, orientation, margins, page breaks and section breaks —
@@ -33,31 +32,43 @@ describe('DOCX page setup and sections', () => {
 
   after(() => cleanup(dir))
 
-  test('the document reports one final A4 portrait section with its margins', async () => {
+  test('the document reports one final A4 portrait section with its header and footer', async () => {
     const result = await engine.sections(file)
     assert.equal(result.sectionCount, 1)
     const section = result.sections[0]
     assert.equal(section.kind, 'final')
     assert.equal(section.paragraphIndex, null)
+    // A4 portrait is what R7's template states, and also the default the engine
+    // assumes for a section that carries no `w:pgSz` — so the geometry this
+    // test is about holds on a machine without R7 too.
     assert.equal(section.pageSize.orientation, 'portrait')
     assert.equal(section.pageSize.widthCm, 21)
     assert.equal(section.pageSize.heightCm, 29.7)
-    assert.equal(section.pageSize.assumed, false)
+    assert.equal(section.headers.default.partName, 'word/header1.xml')
+    assert.equal(section.footers.default.partName, 'word/footer1.xml')
+  })
+
+  test("the created document carries R7's own page margins", async (t) => {
+    if (requiresR7(t)) return
+    const section = (await engine.sections(file)).sections[0]
+    assert.equal(section.pageSize.assumed, false, "R7's template states w:pgSz explicitly")
     // R7's own template margins: 2 cm top, 1.5 cm right, 2 cm bottom, 3 cm left.
     assert.equal(section.margins.top.cm, 2)
     assert.equal(section.margins.right.cm, 1.5)
     assert.equal(section.margins.bottom.cm, 2)
     assert.equal(section.margins.left.cm, 3)
-    assert.equal(section.headers.default.partName, 'word/header1.xml')
-    assert.equal(section.footers.default.partName, 'word/footer1.xml')
   })
 
   test('landscape swaps the page dimensions and keeps the margins', async () => {
+    const before = (await engine.sections(file)).sections[0]
     const set = await engine.setSection(file, { orientation: 'landscape' })
     assert.equal(set.section.pageSize.orientation, 'landscape')
     assert.equal(set.section.pageSize.widthCm, 29.7)
     assert.equal(set.section.pageSize.heightCm, 21)
-    assert.equal(set.section.margins.left.cm, 3, 'an unnamed margin must survive')
+    // The margin was not named by the caller, so the edit must hand it back
+    // unchanged. The value itself (R7's 3 cm, or nothing at all on the package
+    // the engine builds without R7) is the base document's business.
+    assert.deepEqual(set.section.margins.left, before.margins.left, 'an unnamed margin must survive')
     assert.equal(set.section.headers.default.relId !== null, true, 'header references must survive')
     assert.equal(set.section.footers.default.relId !== null, true, 'footer references must survive')
 
@@ -67,13 +78,17 @@ describe('DOCX page setup and sections', () => {
   })
 
   test('margins are set in centimetres', async () => {
+    const before = (await engine.sections(file)).sections[0]
     const set = await engine.setSection(file, {
       margins: { top: 2.5, right: 1.5, bottom: 2.5, left: 1.5, header: 1.25, footer: 1.25 }
     })
     assert.equal(set.section.margins.top.cm, 2.5)
     assert.equal(set.section.margins.left.cm, 1.5)
     assert.equal(set.section.margins.header.cm, 1.25)
-    assert.equal(set.section.margins.gutter.cm, 0, 'an absent gutter reads back as 0, not as lost')
+    // The gutter was not named. R7's template sets it to 0 explicitly, the
+    // package built without R7 leaves it out entirely; either way the edit must
+    // not lose it, so the assertion is "unchanged", not a hard-coded 0.
+    assert.deepEqual(set.section.margins.gutter, before.margins.gutter, 'an unnamed gutter is carried over unchanged')
   })
 
   test('a margin given as twips keeps its exact OOXML value', async () => {
@@ -160,10 +175,12 @@ describe('DOCX page setup and sections', () => {
     assert.equal(sections[1].pageSize.orientation, 'landscape')
     assert.equal(sections[1].margins.left.cm, 1)
 
-    // The body-level section must still be the last child of the body.
+    // The body-level section must still be the last child of the body. The
+    // whitespace before `</w:body>` differs between R7's template and the
+    // package the engine builds without it, so it is not part of the subject.
     const zip = await archiveOf(source)
     const docXml = zip.getText('word/document.xml')
-    assert.match(docXml, /<\/w:p>\s*<w:sectPr[^>]*>[\s\S]*<\/w:sectPr><\/w:body>/)
+    assert.match(docXml, /<\/w:p>\s*<w:sectPr[^>]*>[\s\S]*<\/w:sectPr>\s*<\/w:body>/)
     assert.equal((await engine.validate(source)).valid, true)
   })
 
@@ -216,10 +233,7 @@ describe('DOCX page setup and sections', () => {
   })
 
   test('R7 reopens the multi-section document and renders it', async (t) => {
-    if (!r7Available) {
-      t.skip('R7 not installed')
-      return
-    }
+    if (requiresR7(t)) return
     const source = path.join(dir, 'render-sections.docx')
     await engine.create(source, {
       paragraphs: ['Первый раздел.', 'Второй раздел после разрыва.'],

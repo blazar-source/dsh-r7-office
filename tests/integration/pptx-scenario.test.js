@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { PptxEngine } from '../../src/r7/pptx.js'
-import { R7Adapter } from '../../src/r7/adapter.js'
 import { ZipArchive } from '../../src/shared/zip.js'
 import { readRelationships, slideParts } from '../../src/r7/pptx-util.js'
+import { requiresR7, R7_AVAILABLE } from '../helpers/r7-gate.js'
 import { sameBytes, tempDir, writeGradientPng } from './helpers/pptx-fixtures.js'
 
 /**
@@ -27,7 +27,6 @@ import { sameBytes, tempDir, writeGradientPng } from './helpers/pptx-fixtures.js
 describe('PPTX critical scenario on a real business deck', () => {
   const tmpDir = tempDir('pptx_scenario')
   let engine
-  let r7Available = false
   let deck = null
   let originalBytes = null
   const copy = path.join(tmpDir, 'Сценарий — копия.pptx')
@@ -69,9 +68,11 @@ describe('PPTX critical scenario on a real business deck', () => {
   }
 
   before(async () => {
+    // Every test here is about a real deck on R7's eleven layouts, its master
+    // and its themes; without the template there is nothing to author. The
+    // deck is not built at all, and each test skips with the stated reason.
+    if (!R7_AVAILABLE) return
     engine = new PptxEngine()
-    const info = await new R7Adapter().detect()
-    r7Available = info.installed
     deck = path.join(tmpDir, 'Сценарий.pptx')
     await authorDeck(deck)
     originalBytes = fs.readFileSync(deck)
@@ -85,28 +86,28 @@ describe('PPTX critical scenario on a real business deck', () => {
     }
   })
 
-  test('the authored deck has the seven slides and the real R7 part graph', async () => {
+  test('the authored deck has the seven slides and the real R7 part graph', async (t) => {
+    if (requiresR7(t)) return
     const slide = await engine.readSlide(deck, 0)
     assert.equal(slide.slideCount, 7)
     const zip = await ZipArchive.fromFile(deck)
-    if (r7Available) {
-      assert.equal(slide.layouts.length, 11, 'the R7 template ships eleven layouts')
-      for (const part of [
-        'ppt/slideMasters/slideMaster1.xml',
-        'ppt/theme/theme1.xml',
-        'ppt/theme/theme2.xml',
-        'ppt/notesMasters/notesMaster1.xml',
-        'ppt/tableStyles.xml',
-        'ppt/presProps.xml',
-        'ppt/viewProps.xml'
-      ]) {
-        assert.ok(zip.has(part), `${part} is present`)
-      }
+    assert.equal(slide.layouts.length, 11, 'the R7 template ships eleven layouts')
+    for (const part of [
+      'ppt/slideMasters/slideMaster1.xml',
+      'ppt/theme/theme1.xml',
+      'ppt/theme/theme2.xml',
+      'ppt/notesMasters/notesMaster1.xml',
+      'ppt/tableStyles.xml',
+      'ppt/presProps.xml',
+      'ppt/viewProps.xml'
+    ]) {
+      assert.ok(zip.has(part), `${part} is present`)
     }
     assert.equal((await engine.validate(deck)).valid, true)
   })
 
-  test('read -> edit text -> restyle -> add object -> add slide -> save as a copy', async () => {
+  test('read -> edit text -> restyle -> add object -> add slide -> save as a copy', async (t) => {
+    if (requiresR7(t)) return
     // 1. READ: the normalized model is enough to address everything.
     const slideTwo = await engine.readSlide(deck, 1)
     const title = slideTwo.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
@@ -162,7 +163,8 @@ describe('PPTX critical scenario on a real business deck', () => {
     assert.equal((await engine.validate(copy)).valid, true)
   })
 
-  test('every other slide is byte-identical after the scenario', async () => {
+  test('every other slide is byte-identical after the scenario', async (t) => {
+    if (requiresR7(t)) return
     const before = await ZipArchive.fromFile(deck)
     const after = await ZipArchive.fromFile(copy)
 
@@ -207,7 +209,8 @@ describe('PPTX critical scenario on a real business deck', () => {
     assert.equal(after.list().length, before.list().length + 2, 'exactly the new slide and its relationships were added')
   })
 
-  test('the master, layouts, theme and notes are all preserved and relationships resolve', async () => {
+  test('the master, layouts, theme and notes are all preserved and relationships resolve', async (t) => {
+    if (requiresR7(t)) return
     const before = await ZipArchive.fromFile(deck)
     const after = await ZipArchive.fromFile(copy)
 
@@ -235,7 +238,8 @@ describe('PPTX critical scenario on a real business deck', () => {
     assert.equal(layouts.layouts.filter((l) => l.name).length, 11)
   })
 
-  test('the image and the caption survive, and the media is untouched', async () => {
+  test('the image and the caption survive, and the media is untouched', async (t) => {
+    if (requiresR7(t)) return
     const before = await ZipArchive.fromFile(deck)
     const after = await ZipArchive.fromFile(copy)
 
@@ -257,10 +261,7 @@ describe('PPTX critical scenario on a real business deck', () => {
   })
 
   test('the copy renders to PDF exactly like the original', async (t) => {
-    if (!r7Available) {
-      t.skip('R7-Office installation not available on this host')
-      return
-    }
+    if (requiresR7(t)) return
     for (const [label, source] of [
       ['original', deck],
       ['copy', path.join(tmpDir, 'Сценарий — копия.pptx')]

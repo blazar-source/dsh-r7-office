@@ -24,20 +24,18 @@ import path from 'node:path'
 import os from 'node:os'
 import zlib from 'node:zlib'
 import { XlsxEngine } from '../../src/r7/xlsx.js'
-import { R7Adapter } from '../../src/r7/adapter.js'
 import { ZipArchive } from '../../src/shared/zip.js'
 import { getPageSetup, setPageSetup, setTabSelected } from '../../src/r7/xlsx-worksheet.js'
 import { countPdfPages, mergePdfs, parsePdfDocument, setWorkbookActiveTab } from '../../src/r7/xlsx-pdf.js'
+import { requiresR7 } from '../helpers/r7-gate.js'
 
 const tmpDir = path.join(os.tmpdir(), `dsh_r7_xlsx_pdf_${Date.now()}`)
 const engine = new XlsxEngine()
-let r7Available = false
 
 const SHEETS = ['Доходы', 'Расходы', 'Итоги']
 
 before(async () => {
   fs.mkdirSync(tmpDir, { recursive: true })
-  r7Available = (await new R7Adapter().detect()).installed
 })
 
 after(() => {
@@ -432,10 +430,13 @@ describe('Byte preservation', () => {
     assert.deepEqual((await changedMembers(base, withArea)).sort(),
       ['xl/workbook.xml', 'xl/worksheets/sheet2.xml'])
 
-    // The untouched sheets are byte-identical, not merely equivalent.
+    // The untouched members are byte-identical, not merely equivalent. The list
+    // comes from the package itself: a workbook built without the R7 template
+    // has no xl/styles.xml, and naming one would compare against null.
     const before = await ZipArchive.fromFile(base)
     const after = await ZipArchive.fromFile(withArea)
-    for (const part of ['xl/worksheets/sheet1.xml', 'xl/worksheets/sheet3.xml', 'xl/styles.xml', '[Content_Types].xml']) {
+    for (const part of before.list()) {
+      if (part === 'xl/workbook.xml' || part === 'xl/worksheets/sheet2.xml') continue
       assert.ok(after.getBuffer(part).equals(before.getBuffer(part)), `${part} must stay byte-identical`)
     }
     assert.ok(after.getBuffer('xl/worksheets/sheet2.xml').length > before.getBuffer('xl/worksheets/sheet2.xml').length)
@@ -550,10 +551,7 @@ describe('All-sheet PDF export', () => {
   })
 
   test('every worksheet is exported by default, in tab order', async (t) => {
-    if (!r7Available) {
-      t.skip('R7 not installed')
-      return
-    }
+    if (requiresR7(t)) return
     const out = path.join(tmpDir, 'export-all.pdf')
     allSheetsResult = await engine.exportPdf(book, { outputPath: out })
 
@@ -579,10 +577,7 @@ describe('All-sheet PDF export', () => {
   })
 
   test('a named sheet exports on its own', async (t) => {
-    if (!r7Available) {
-      t.skip('R7 not installed')
-      return
-    }
+    if (requiresR7(t)) return
     const out = path.join(tmpDir, 'export-named.pdf')
     const result = await engine.exportPdf(book, { outputPath: out, sheetName: 'Расходы' })
 
@@ -593,10 +588,7 @@ describe('All-sheet PDF export', () => {
   })
 
   test('allSheets: false exports the first sheet only', async (t) => {
-    if (!r7Available) {
-      t.skip('R7 not installed')
-      return
-    }
+    if (requiresR7(t)) return
     const out = path.join(tmpDir, 'export-first.pdf')
     const result = await engine.exportPdf(book, { outputPath: out, allSheets: false })
 
@@ -605,10 +597,7 @@ describe('All-sheet PDF export', () => {
   })
 
   test('the page count grows with the number of sheets', async (t) => {
-    if (!r7Available) {
-      t.skip('R7 not installed')
-      return
-    }
+    if (requiresR7(t)) return
     assert.ok(allSheetsResult, 'the three-sheet export ran first')
     const one = await engine.exportPdf(single, { outputPath: path.join(tmpDir, 'export-single.pdf') })
 
@@ -625,10 +614,7 @@ describe('All-sheet PDF export', () => {
   })
 
   test('the acceptance workbook shape renders with every sheet present', async (t) => {
-    if (!r7Available) {
-      t.skip('R7 not installed')
-      return
-    }
+    if (requiresR7(t)) return
     // The same shape as examples/xlsx-acceptance.js: three sheets, wide comment
     // column, merged title, fit on one page.
     const acceptance = path.join(tmpDir, 'acceptance.xlsx')

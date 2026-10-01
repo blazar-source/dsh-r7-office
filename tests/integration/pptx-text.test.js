@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { PptxEngine } from '../../src/r7/pptx.js'
-import { R7Adapter } from '../../src/r7/adapter.js'
 import { ZipArchive } from '../../src/shared/zip.js'
-import { tempDir } from './helpers/pptx-fixtures.js'
+import { requiresR7, R7_AVAILABLE, HAS_R7_TEMPLATES } from '../helpers/r7-gate.js'
+import { tempDir, addSlideAnywhere, clearSlide } from './helpers/pptx-fixtures.js'
 
 /**
  * Text formatting, geometry and alignment.
@@ -17,14 +17,23 @@ import { tempDir } from './helpers/pptx-fixtures.js'
 describe('PPTX text formatting and geometry', () => {
   const tmpDir = tempDir('pptx_text')
   let engine
-  let r7Available = false
   const deck = path.join(tmpDir, 'Текст.pptx')
 
-  /** A deck with one prepared slide carrying a heading, a body and a free text box. */
+  /**
+   * A deck with one prepared slide carrying a heading, a body and a free text
+   * box — as far as this host can produce it.
+   *
+   * With R7 the slide is built on the content layout, so the heading and the
+   * body placeholder are real and the tests that address them use it. Without
+   * R7 the package has no layouts at all: the second slide is a clone of the
+   * first with its inherited shape removed, which leaves the free text box as
+   * the only object to format. Tests whose subject is a placeholder are gated
+   * with `requiresR7` rather than reading a placeholder that is not there.
+   */
   async function freshDeck(name) {
     const target = path.join(tmpDir, name)
     await engine.create(target, { overwrite: true, title: 'Исходный заголовок' })
-    await engine.addSlide(target, {
+    await addSlideAnywhere(engine, target, {
       layoutType: 'obj',
       title: 'Заголовок раздела',
       paragraphs: [
@@ -32,6 +41,7 @@ describe('PPTX text formatting and geometry', () => {
         { text: 'Второй пункт', bullet: true, level: 1 }
       ]
     })
+    if (!HAS_R7_TEMPLATES) await clearSlide(engine, target, 1)
     const textBox = await engine.addTextBox(target, {
       slideIndex: 1,
       x: 500000, y: 4000000, width: 4000000, height: 900000,
@@ -43,8 +53,7 @@ describe('PPTX text formatting and geometry', () => {
 
   before(async () => {
     engine = new PptxEngine()
-    const info = await new R7Adapter().detect()
-    r7Available = info.installed
+    if (!R7_AVAILABLE) return
     await engine.create(deck, { overwrite: true, title: 'Текстовая презентация' })
     await engine.addSlide(deck, {
       layoutType: 'obj',
@@ -61,7 +70,9 @@ describe('PPTX text formatting and geometry', () => {
     }
   })
 
-  test('the reader reports the real font family and size a title inherits', async () => {
+  test('the reader reports the real font family and size a title inherits', async (t) => {
+    // The inherited size and family come from R7's title layout.
+    if (requiresR7(t)) return
     const slide = await engine.readSlide(deck, 0)
     const title = slide.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'ctrTitle')
     assert.ok(title, 'the title slide exposes its title placeholder')
@@ -70,7 +81,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.equal(title.positionValid, true, 'the title has usable geometry')
   })
 
-  test('font family, size, bold, italic, underline and colour are written and read back', async () => {
+  test('font family, size, bold, italic, underline and colour are written and read back', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('font.pptx')
     const before = await engine.readSlide(target, 1)
     const title = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
@@ -98,7 +110,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.equal(updated.font.color, '#C00000')
   })
 
-  test('a font name also reaches the complex-script slot, so Cyrillic changes', async () => {
+  test('a font name also reaches the complex-script slot, so Cyrillic changes', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('font-cs.pptx')
     const before = await engine.readSlide(target, 1)
     const body = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
@@ -110,7 +123,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.match(slideXml, /<a:cs typeface="PT Sans"\/>/, 'Cyrillic must not fall back to the theme font')
   })
 
-  test('underline accepts a style name and false removes it', async () => {
+  test('underline accepts a style name and false removes it', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('underline.pptx')
     const before = await engine.readSlide(target, 1)
     const title = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
@@ -124,7 +138,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.equal(slide.slide.objects.find((o) => o.id === title.id).font.underline, false)
   })
 
-  test('an unsupported underline style is rejected instead of silently ignored', async () => {
+  test('an unsupported underline style is rejected instead of silently ignored', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('underline-bad.pptx')
     const before = await engine.readSlide(target, 1)
     const title = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
@@ -134,7 +149,8 @@ describe('PPTX text formatting and geometry', () => {
     )
   })
 
-  test('paragraph alignment is applied and read back', async () => {
+  test('paragraph alignment is applied and read back', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('align.pptx')
     const before = await engine.readSlide(target, 1)
     const title = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
@@ -148,7 +164,8 @@ describe('PPTX text formatting and geometry', () => {
     }
   })
 
-  test('vertical anchor is applied to the text body and reported', async () => {
+  test('vertical anchor is applied to the text body and reported', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('anchor.pptx')
     const before = await engine.readSlide(target, 1)
     const title = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'title')
@@ -207,7 +224,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.equal(object.width, 2000000)
   })
 
-  test('bulleted and numbered lists are distinguished when read back', async () => {
+  test('bulleted and numbered lists are distinguished when read back', async (t) => {
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'lists.pptx')
     await engine.create(target, { overwrite: true, title: 'Списки' })
     await engine.addSlide(target, {
@@ -233,7 +251,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.equal(body.paragraphs[3].bulletCharacter, '–')
   })
 
-  test('line spacing and paragraph spacing survive a round-trip', async () => {
+  test('line spacing and paragraph spacing survive a round-trip', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('spacing.pptx')
     const before = await engine.readSlide(target, 1)
     const body = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
@@ -253,7 +272,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.equal(object.paragraphs[0].spaceAfter, 6)
   })
 
-  test('paragraphIndex formats one paragraph and leaves its siblings alone', async () => {
+  test('paragraphIndex formats one paragraph and leaves its siblings alone', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('one-paragraph.pptx')
     const before = await engine.readSlide(target, 1)
     const body = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
@@ -273,7 +293,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.notEqual(object.paragraphs[0].alignment, 'r', 'the first paragraph must keep its alignment')
   })
 
-  test('an out-of-range paragraphIndex fails loudly', async () => {
+  test('an out-of-range paragraphIndex fails loudly', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('one-paragraph-bad.pptx')
     const before = await engine.readSlide(target, 1)
     const body = before.slide.objects.find((o) => o.placeholder && o.placeholder.type === 'body')
@@ -283,7 +304,8 @@ describe('PPTX text formatting and geometry', () => {
     )
   })
 
-  test('mixed formatting inside one paragraph is preserved as runs', async () => {
+  test('mixed formatting inside one paragraph is preserved as runs', async (t) => {
+    if (requiresR7(t)) return
     const target = path.join(tmpDir, 'runs.pptx')
     await engine.create(target, { overwrite: true, title: 'Прогоны' })
     await engine.addSlide(target, {
@@ -316,7 +338,8 @@ describe('PPTX text formatting and geometry', () => {
     assert.equal(object.x, 500000, 'geometry must survive a text replacement')
   })
 
-  test('editSlide still replaces text by search and reports the match count', async () => {
+  test('editSlide still replaces text by search and reports the match count', async (t) => {
+    if (requiresR7(t)) return
     const { target } = await freshDeck('search-replace.pptx')
     const result = await engine.editSlide(target, {
       slideIndex: 1,
@@ -366,10 +389,7 @@ describe('PPTX text formatting and geometry', () => {
   })
 
   test('the edited deck renders to PDF in R7', async (t) => {
-    if (!r7Available) {
-      t.skip('R7-Office installation not available on this host')
-      return
-    }
+    if (requiresR7(t)) return
     const { target, textBoxId } = await freshDeck('render.pptx')
     await engine.formatObject(target, { slideIndex: 1, objectId: textBoxId, size: 28, bold: true, color: '#1F6FEB' })
     const pdfPath = path.join(tmpDir, 'render.pdf')

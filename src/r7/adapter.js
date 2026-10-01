@@ -13,6 +13,12 @@ const MIN_ALL_FONTS_BYTES = 1024
 
 const XML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }
 
+/** `1`, `true`, `yes` or `on` — anything else means "not set". */
+function isTruthyEnv(value) {
+  if (value === undefined || value === null) return false
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase())
+}
+
 /** Escape a path for use as XML text content. */
 export function escapeXmlText(value) {
   return String(value).replace(/[&<>"']/g, (ch) => XML_ESCAPES[ch])
@@ -200,6 +206,23 @@ export class R7Adapter {
    */
   async detect() {
     if (this._info) return this._info
+
+    // Testing seam, and a real one for users: R7_OFFICE_DISABLED makes the
+    // adapter report no installation even where one exists, so the fallback
+    // paths can be exercised on a developer machine and in CI parity runs.
+    // It changes no detection logic — it only short-circuits it.
+    if (isTruthyEnv(process.env.R7_OFFICE_DISABLED)) {
+      this._info = {
+        installed: false,
+        version: null,
+        installPath: null,
+        x2tPath: null,
+        templatesPath: null,
+        pluginsPath: null,
+        disabled: true
+      }
+      return this._info
+    }
 
     const platform = os.platform()
     let installPath = this.customPath || process.env.R7_OFFICE_PATH || null

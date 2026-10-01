@@ -18,6 +18,7 @@ import { PptxEngine } from '../../src/r7/pptx.js'
 import { DocxEngine } from '../../src/r7/docx.js'
 import { R7Adapter } from '../../src/r7/adapter.js'
 import { ZipArchive } from '../../src/shared/zip.js'
+import { requiresR7 } from '../helpers/r7-gate.js'
 
 const tmpDir = path.join(os.tmpdir(), `dsh_r7_struct_${Date.now()}`)
 
@@ -32,12 +33,10 @@ function looksLikePdf(filePath) {
 
 describe('Workbook and presentation structure', () => {
   let adapter
-  let r7Available = false
 
   before(async () => {
     fs.mkdirSync(tmpDir, { recursive: true })
     adapter = new R7Adapter()
-    r7Available = (await adapter.detect()).installed
   })
 
   after(() => {
@@ -80,7 +79,7 @@ describe('Workbook and presentation structure', () => {
     })
 
     test('R7 accepts the multi-sheet workbook', async (t) => {
-      if (!r7Available) { t.skip('R7 not installed'); return }
+      if (requiresR7(t)) return
       const pdf = path.join(tmpDir, 'multi.pdf')
       await adapter.convert(book, pdf)
       assert.ok(looksLikePdf(pdf), 'x2t rendered the workbook')
@@ -158,7 +157,7 @@ describe('Workbook and presentation structure', () => {
     })
 
     test('R7 accepts the workbook after a sheet was added', async (t) => {
-      if (!r7Available) { t.skip('R7 not installed'); return }
+      if (requiresR7(t)) return
       const pdf = path.join(tmpDir, 'append.pdf')
       await adapter.convert(book, pdf)
       assert.ok(looksLikePdf(pdf))
@@ -168,6 +167,12 @@ describe('Workbook and presentation structure', () => {
   describe('PPTX: appending slides', () => {
     const deck = path.join(tmpDir, 'deck.pptx')
 
+    // `create` does have a no-template fallback (_createFallbackBlankPptx), but
+    // that package carries no slide master, layout or theme — and `addSlide`
+    // builds the new slide FROM a layout, so it can only run against a deck made
+    // from R7's template. The three `addSlide` cases below skip themselves
+    // without it, as does the final x2t render; `setup` and `validate` stay
+    // portable, so the fallback deck still gets created and checked.
     test('setup: a deck with one slide', async () => {
       const pptx = new PptxEngine(adapter)
       await pptx.create(deck, { title: 'Первый слайд' })
@@ -176,7 +181,8 @@ describe('Workbook and presentation structure', () => {
       assert.equal(info.slides[0].title, 'Первый слайд')
     })
 
-    test('addSlide appends instead of replacing the deck', async () => {
+    test('addSlide appends instead of replacing the deck', async (t) => {
+      if (requiresR7(t)) return
       const pptx = new PptxEngine(adapter)
       const before = await ZipArchive.fromFile(deck)
       const slide1Before = before.getBuffer('ppt/slides/slide1.xml')
@@ -196,7 +202,8 @@ describe('Workbook and presentation structure', () => {
         'slide1.xml is byte-identical after appending')
     })
 
-    test('a third slide appends cleanly', async () => {
+    test('a third slide appends cleanly', async (t) => {
+      if (requiresR7(t)) return
       const pptx = new PptxEngine(adapter)
       await pptx.addSlide(deck, { title: 'Третий слайд' })
       const info = await pptx.inspect(deck)
@@ -204,7 +211,8 @@ describe('Workbook and presentation structure', () => {
       assert.deepEqual(info.slides.map(s => s.title), ['Первый слайд', 'Второй слайд', 'Третий слайд'])
     })
 
-    test('the appended slides registered every required package part', async () => {
+    test('the appended slides registered every required package part', async (t) => {
+      if (requiresR7(t)) return
       const zip = await ZipArchive.fromFile(deck)
       const contentTypes = zip.getText('[Content_Types].xml')
       const presRels = zip.getText('ppt/_rels/presentation.xml.rels')
@@ -237,7 +245,7 @@ describe('Workbook and presentation structure', () => {
     })
 
     test('R7 opens and renders the deck after slides were appended', async (t) => {
-      if (!r7Available) { t.skip('R7 not installed'); return }
+      if (requiresR7(t)) return
       const pdf = path.join(tmpDir, 'deck.pdf')
       await adapter.convert(deck, pdf)
       assert.ok(looksLikePdf(pdf))

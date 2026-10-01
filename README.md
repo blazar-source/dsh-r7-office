@@ -175,13 +175,108 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node src/mcp/cli.js
 | `r7_sheet_write` | Write cells or a 2-D matrix, addressed by sheet name or index |
 | `r7_sheet_add` | Add a worksheet to an existing workbook; other sheets are untouched |
 | `r7_sheet_formula` | Insert or update a formula |
-| `r7_slide_create` | Create a deck, or **append** a slide to an existing one without altering the slides already there |
-| `r7_slide_edit` | Edit slide titles and text frames |
+| `r7_slide_read` | Read a slide as a normalized structure: every object's id, type, geometry, text, font, fill, stroke, alignment and paragraphs |
+| `r7_slide_create` | Create a deck, or **append** a slide built on one of the deck's own layouts, without altering the slides already there |
+| `r7_slide_format` | Restyle or reposition one existing object in place: font, geometry, fill, border, alignment, lists, spacing, text |
+| `r7_slide_edit` | Duplicate, move, reorder or delete slides |
+| `r7_slide_object` | Add or remove an object: shape, text box or PNG/JPEG image |
 | `r7_convert` | Convert via the R7 `x2t` engine (PDF, HTML, TXT, DOCX, XLSX, PPTX) |
 | `r7_validate` | Check package integrity and XML health |
 | `r7_desktop_status` | Desktop bridge connection and effective security mode |
 | `r7_desktop_selection` | Read or replace the selection in the open editor |
 | `r7_desktop_exec` | Run a safe editor command, or raw DocScript in developer mode |
+
+### Presentations
+
+A deck is built on the layouts it already has. Adding a slide registers the
+slide part, its relationship part, its `[Content_Types].xml` override, its
+`<p:sldId>` entry and the presentation relationship; the layout, the master,
+the theme, the notes and every slide that already existed keep their original
+bytes. A placeholder written onto a slide stays a placeholder, so it keeps
+inheriting its geometry and typography from the master.
+
+Reading resolves that inheritance for you: `r7_slide_read` reports a title
+slide's 60 pt layout title rather than the presentation's 18 pt default, and
+reports the position a placeholder inherits from the layout or the master
+instead of `null`.
+
+```javascript
+import { PptxEngine } from 'dsh-r7-office/r7'
+
+const pptx = new PptxEngine()
+
+// 1. Read: geometry, text, font, fill, stroke, alignment, paragraphs.
+const before = await pptx.readSlide('Deck.pptx', 1)
+const title = before.slide.objects.find(o => o.placeholder?.type === 'title')
+const body = before.slide.objects.find(o => o.placeholder?.type === 'body')
+console.log(title.x, title.width, title.font.family, title.font.size)
+
+// 2. Add a slide on one of the deck's own layouts.
+const added = await pptx.addSlide('Deck.pptx', {
+  layoutType: 'obj',
+  title: 'Ключевые выводы',
+  paragraphs: [{ text: 'Выручка +18%', bullet: true }]
+})
+
+// 3. Restyle one object. Everything not named keeps its original bytes.
+await pptx.formatObject('Deck.pptx', {
+  slideIndex: added.slideIndex,
+  objectId: title.id,
+  font: { family: 'Georgia', size: 32, bold: true, color: '#1F6FEB' },
+  alignment: 'center'
+})
+
+// 4. Add an object: fill, border, text, font, geometry — all in one call.
+await pptx.addShape('Deck.pptx', {
+  slideIndex: added.slideIndex,
+  shape: 'rounded-rectangle',          // rectangle, ellipse, line, arrow, star, …
+  x: '2cm', y: '10cm', width: '9.4cm', height: '8.2cm',
+  fill: '#1F6FEB', fillTransparency: 0.1,
+  line: '#0B3D91', lineWidth: 2,       // lineWidth is in points
+  text: 'KPI 98%',
+  font: { family: 'Arial', size: 24, bold: true, color: '#FFFFFF' },
+  alignment: 'center', verticalAnchor: 'middle'
+})
+
+// 5. Insert and replace a picture.
+const image = await pptx.addImage('Deck.pptx', {
+  slideIndex: added.slideIndex, imagePath: 'chart.png', x: '4cm', y: '4cm', width: '24cm'
+})
+await pptx.formatObject('Deck.pptx', {
+  slideIndex: added.slideIndex, objectId: image.objectId, imagePath: 'chart-v2.png'
+})
+
+// 6. Structure, and a PDF.
+await pptx.duplicateSlide('Deck.pptx', 1)
+await pptx.moveSlide('Deck.pptx', 2, 0)
+await pptx.deleteSlide('Deck.pptx', 4)
+console.log((await pptx.validate('Deck.pptx')).valid)
+await pptx.toPdf('Deck.pptx', 'Deck.pdf')
+```
+
+Run the full acceptance deck:
+
+```bash
+node examples/pptx-acceptance.js            # writes into os.tmpdir()/r7-acceptance
+node examples/pptx-acceptance.js ./out      # or wherever you like
+```
+
+**Measurements.** A bare number is EMU (the unit `r7_slide_read` returns), so a
+value can be read, adjusted and written back unchanged. `"2cm"`, `"1in"`,
+`"30px"` and `"24pt"` also work. `lineWidth` is the exception: a number below
+100 is read as points, because "border: 1.5" means 1.5 pt to everyone who is
+not holding a DrawingML specification.
+
+**Colours.** `#RRGGBB`, `#AARRGGBB` and transparency as a separate 0..1 option.
+`transparency` on a font and `fillTransparency` on a fill are deliberately
+distinct, so a half-transparent caption colour cannot make the shape under it
+see-through.
+
+**Shapes.** `rectangle`, `rounded-rectangle`, `ellipse`, `circle`, `line`,
+`arrow` (and `arrow-left/up/down/left-right`), `triangle`, `diamond`,
+`pentagon`, `hexagon`, `octagon`, `star`, `chevron`, `plus`, `cloud`, `heart`,
+`cylinder`, `cube`, `donut`, `pie`, `parallelogram`, `trapezoid` — or any
+DrawingML preset name. `pptx.shapeCatalog()` lists them all.
 
 ---
 
@@ -249,6 +344,20 @@ vulnerability.
 
 ## Known limitations
 
+- **Presentations: building layouts or masters is out of scope.** Slides are
+  created on the layouts the deck already contains; a deck that ships none gets
+  the generic title/body pair.
+- **Presentations: SmartArt and charts are preserved, never authored.** The
+  reader reports them (`type: "chart"`, `type: "graphicFrame"`) and every part
+  behind them stays byte-identical through any edit, but the engine cannot
+  create one. A hand-written SmartArt frame is just a `dgm:relIds` reference,
+  and R7's own renderer dereferences the diagram parts behind it.
+- **Presentations: image replacement stores a fresh media part** when the
+  format changes or the media is shared, so the old part can be left
+  unreferenced. Everything that still points at it keeps working.
+- **Presentations: theme colours read back as tokens** (`scheme:accent1`),
+  because no literal hex exists until the theme is resolved. Writing accepts
+  literals only.
 - **Live desktop bridge: Windows verified.** The bridge plugin itself is
   platform-neutral, but the automated live test drives R7-Office Desktop
   through the CEF DevTools protocol and is only verified against the Windows

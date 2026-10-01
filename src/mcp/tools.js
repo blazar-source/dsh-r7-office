@@ -249,6 +249,26 @@ export function buildR7Tools(options = {}) {
 
         throw new Error('Must provide either safeCommand or code parameter.')
       }
+    },
+
+    {
+      name: 'r7_pdf_inspect',
+      description: 'Measure the text fidelity of a PDF: page and font inventory, how many glyphs are really drawn by text operators, how many glyph fills painted nothing, whether the text is extractable, and a verdict (text/outlined/mixed). Use it to prove a PDF export kept its text instead of silently losing it; set repair to fix malformed ToUnicode CMap entry counts that make R7-exported body text copy out as garbage.',
+      parameters: {
+        type: 'object',
+        required: ['filePath'],
+        properties: {
+          filePath: { type: 'string', description: 'Path to the PDF file to inspect.' },
+          repair: { type: 'boolean', description: 'Repair malformed ToUnicode CMap entry counts in place (rewrites filePath) before reporting. Default false.' }
+        }
+      },
+      output: defaultOutput(),
+      async execute({ filePath, repair = false }) {
+        // Imported lazily so this entry is a pure append to this shared module.
+        const { inspectPdf, repairToUnicodeCMaps } = await import('../r7/pdf-inspect.js')
+        const repairs = repair ? repairToUnicodeCMaps(filePath).repairs : []
+        return { ...inspectPdf(filePath), repairs }
+      }
     }
   ]
 }

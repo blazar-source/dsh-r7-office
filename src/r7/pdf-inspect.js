@@ -27,6 +27,7 @@
 
 import fs from 'node:fs'
 import zlib from 'node:zlib'
+import { fontIdentity, readCmap, readGlyph, glyphOutlineKey, sameGlyphSpace } from './sfnt.js'
 
 const WS = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20])
 const PATH_CONSTRUCTION_OPS = new Set(['m', 'l', 'c', 'v', 'y', 're', 'h'])
@@ -374,23 +375,225 @@ function hasFontFile(objects, descriptor) {
   return ref !== null && objects.has(ref)
 }
 
+// ---------------------------------------------------------------------------
+// Glyph-chain verification
+//
+// A CIDFontType2 PDF font is only *correct* when both of these land on the same
+// outline:
+//
+//   content code -> CID -> CIDToGIDMap[cid] -> GID -> glyf outline
+//   content code -> CID -> ToUnicode[cid]  -> Unicode -> cmap -> GID
+//
+// Text extraction only exercises the second chain, so a PDF whose glyph IDs were
+// taken from a DIFFERENT font (R7's metric-compatible substitute) extracts
+// perfectly and draws the wrong shapes. Deciding which glyph a GID holds needs
+// the font the subset was cut from - the subset's own `cmap` cannot say, because
+// x2t writes a private format 6 table whose glyphIdArray is a copy of
+// CIDToGIDMap. So the caller supplies candidate source fonts (the same font list
+// handed to x2t) and this check stays renderer-free.
+// ---------------------------------------------------------------------------
+
+/** Cache parsed candidate fonts; a font list can hold hundreds of files. */
+const SOURCE_FONT_CACHE = new Map()
+
+function sourceFontRecord(filePath) {
+  if (SOURCE_FONT_CACHE.has(filePath)) return SOURCE_FONT_CACHE.get(filePath)
+  let record = null
+  try {
+    const buf = fs.readFileSync(filePath)
+    const identity = fontIdentity(buf)
+    if (identity) record = { path: filePath, identity, cmap: readCmap(identity.sfnt) }
+  } catch {
+    record = null
+  }
+  SOURCE_FONT_CACHE.set(filePath, record)
+  return record
+}
+
+/** Clear the parsed-candidate cache (tests and long-lived hosts). */
+export function clearSourceFontCache() {
+  SOURCE_FONT_CACHE.clear()
+}
+
+function fontBasename(filePath) {
+  return String(filePath).split(/[\\/]/).pop() || ''
+}
+
+/** First run of letters in a family name, used to prefilter candidate files. */
+function familyToken(family) {
+  const match = /[A-Za-z]{3,}/.exec(family || '')
+  return match ? match[0].toLowerCase() : null
+}
+
+/**
+ * Candidate source fonts that share the embedded subset's glyph space.
+ * `sameGlyphSpace` requires the same glyph count and the same advance width for
+ * every glyph, so a different version of the same family is rejected rather than
+ * trusted (and a rejected candidate yields "unverifiable", never "corrupt").
+ */
+export function findSourceFonts(identity, fontPaths) {
+  const token = familyToken(identity.family)
+  const matches = []
+  for (const candidate of fontPaths || []) {
+    if (!candidate) continue
+    if (token && !fontBasename(candidate).toLowerCase().includes(token)) continue
+    const record = sourceFontRecord(candidate)
+    if (!record) continue
+    if (sameGlyphSpace(identity, record.identity)) matches.push(record)
+  }
+  return matches
+}
+
+/**
+ * Verify the CID/GID chain of every embedded CIDFontType2 font.
+ *
+ * @param {ReturnType<typeof parseObjects>} parsed
+ * @param {object} [options]
+ * @param {string[]} [options.fontPaths] candidate source font files
+ * @param {number} [options.maxExamples=5]
+ * @returns {{
+ *   checked: boolean, consistent: boolean|null, sourceFontsMatched: number,
+ *   cidsChecked: number, mismatches: number,
+ *   fonts: Array<{object: number, baseFont: string|null, sourceFont: string|null,
+ *                 cidsChecked: number, mismatches: number,
+ *                 examples: Array<{cid: number, character: string, drawnGid: number, expectedGid: number}>,
+ *                 reason?: string}>
+ * }}
+ */
+export function analyzeGlyphChain(parsed, options = {}) {
+  const { objects, order } = parsed
+  const fontPaths = options.fontPaths || []
+  const maxExamples = options.maxExamples ?? 5
+  const fonts = []
+  let cidsChecked = 0
+  let mismatches = 0
+  let sourceFontsMatched = 0
+
+  for (const num of order) {
+    const obj = objects.get(num)
+    if (!/\/Type\s*\/Font\b/.test(obj.dict)) continue
+    if (!/\/Subtype\s*\/Type0\b/.test(obj.dict)) continue
+
+    const baseFont = nameValue(obj.dict, 'BaseFont')
+    const report = { object: num, baseFont, sourceFont: null, cidsChecked: 0, mismatches: 0, examples: [] }
+
+    const descendant = resolveRefArray(objects, obj.dict, 'DescendantFonts')[0]
+    if (!descendant) { report.reason = 'no-descendant-font'; fonts.push(report); continue }
+    const descriptorRef = refNumber(descendant.dict, 'FontDescriptor')
+    const descriptor = descriptorRef === null ? null : objects.get(descriptorRef)
+    const fileRef = descriptor
+      ? (refNumber(descriptor.dict, 'FontFile2') ?? refNumber(descriptor.dict, 'FontFile3'))
+      : null
+    if (fileRef === null) { report.reason = 'no-embedded-font-file'; fonts.push(report); continue }
+
+    const fontFile = decodeStream(objects.get(fileRef))
+    const identity = fontFile ? fontIdentity(fontFile) : null
+    if (!identity) { report.reason = 'unsupported-font-file'; fonts.push(report); continue }
+
+    const candidates = findSourceFonts(identity, fontPaths)
+    if (!candidates.length) { report.reason = 'no-matching-source-font'; fonts.push(report); continue }
+    sourceFontsMatched++
+    const source = candidates[0]
+    report.sourceFont = source.path
+
+    const toUnicode = resolveRef(objects, obj.dict, 'ToUnicode')
+    const cidMapObject = descriptor === null ? null : resolveRef(objects, descendant.dict, 'CIDToGIDMap')
+    const cidMapStream = cidMapObject ? decodeStream(cidMapObject) : null
+    if (!toUnicode || !cidMapStream) { report.reason = 'no-cid-mapping'; fonts.push(report); continue }
+
+    const decodedToUnicode = decodeStream(toUnicode)
+    if (!decodedToUnicode) { report.reason = 'no-cid-mapping'; fonts.push(report); continue }
+    const cidToGid = []
+    for (let i = 0; i + 2 <= cidMapStream.length; i += 2) cidToGid.push(cidMapStream.readUInt16BE(i))
+
+    const outlineCache = new Map()
+    const embeddedOutlineKey = (gid) => {
+      if (outlineCache.has(gid)) return outlineCache.get(gid)
+      const key = glyphOutlineKey(readGlyph(identity.sfnt, gid))
+      outlineCache.set(gid, key)
+      return key
+    }
+    const sourceOutlineCache = new Map()
+    const sourceOutlineKey = (gid) => {
+      if (sourceOutlineCache.has(gid)) return sourceOutlineCache.get(gid)
+      const key = glyphOutlineKey(readGlyph(source.identity.sfnt, gid))
+      sourceOutlineCache.set(gid, key)
+      return key
+    }
+
+    for (const pair of parseToUnicodeCMap(decodedToUnicode.toString('latin1'))) {
+      const cps = [...pair.unicode]
+      if (cps.length !== 1) continue
+      const codePoint = cps[0].codePointAt(0)
+      if (codePoint === 0) continue
+      const expectedGid = source.cmap.get(codePoint)
+      if (expectedGid === undefined) continue
+      if (pair.code >= cidToGid.length) continue
+      const drawnGid = cidToGid[pair.code]
+      report.cidsChecked++
+      if (drawnGid === expectedGid) continue
+      // A different index is fine when it holds the identical outline (many
+      // fonts share one glyph between look-alike characters).
+      const drawnKey = embeddedOutlineKey(drawnGid)
+      const expectedKey = sourceOutlineKey(expectedGid)
+      if (drawnKey && expectedKey && drawnKey === expectedKey) continue
+      report.mismatches++
+      if (report.examples.length < maxExamples) {
+        report.examples.push({ cid: pair.code, character: cps[0], drawnGid, expectedGid })
+      }
+    }
+
+    cidsChecked += report.cidsChecked
+    mismatches += report.mismatches
+    fonts.push(report)
+  }
+
+  return {
+    checked: cidsChecked > 0,
+    consistent: cidsChecked === 0 ? null : mismatches === 0,
+    sourceFontsMatched,
+    cidsChecked,
+    mismatches,
+    fonts
+  }
+}
+
+/**
+ * Verify the CID/GID chain of a PDF file or buffer.
+ * @param {string|Buffer} input
+ * @param {{fontPaths?: string[], maxExamples?: number}} [options]
+ */
+export function inspectGlyphChain(input, options = {}) {
+  const buf = Buffer.isBuffer(input) ? input : fs.readFileSync(input)
+  return analyzeGlyphChain(parseObjects(buf), options)
+}
+
 /**
  * Inspect a PDF file (or byte buffer) for text fidelity.
  *
  * @param {string|Buffer} input path to a PDF, or the PDF bytes
+ * @param {object} [options]
+ * @param {string[]} [options.fontPaths] candidate source fonts (the same font list
+ *   x2t was given). When supplied, every embedded CID font's glyph chain is
+ *   verified against them and reported in `glyphChain`. Without it the chain is
+ *   simply not checkable and `glyphChain.checked` is false.
  * @returns {{
  *   filePath: string|null, bytes: number, objects: number, pages: number,
  *   fonts: Array<{baseFont: string|null, subtype: string|null, encoding: string|null,
  *                 embedded: boolean, descendantSubtype: string|null,
- *                 toUnicodeMappings: number, cyrillicMappings: number}>,
+ *                 toUnicodeMappings: number, cyrillicMappings: number,
+ *                 glyphChainMismatches: number, glyphChainChecked: number,
+ *                 glyphChainSourceFont: string|null}>,
  *   toUnicodeMappings: number, cyrillicMappings: number,
  *   textGlyphs: number, textRuns: number, pathOperators: number, emptyFillOperators: number,
  *   pageStats: Array<{index: number, textGlyphs: number, pathOperators: number, emptyFillOperators: number}>,
  *   hasExtractableText: boolean, hasCyrillicText: boolean, textLossSuspected: boolean,
- *   verdict: 'text'|'outlined'|'mixed', malformedToUnicode: Array<{object: number, declared: number, actual: number}>
+ *   verdict: 'text'|'outlined'|'mixed', malformedToUnicode: Array<{object: number, declared: number, actual: number}>,
+ *   glyphChain: ReturnType<typeof analyzeGlyphChain>, glyphChainChecked: boolean,
+ *   glyphChainMismatches: number, glyphMapInconsistent: boolean
  * }}
  */
-export function inspectPdf(input) {
+export function inspectPdf(input, options = {}) {
   const isBuffer = Buffer.isBuffer(input)
   const buf = isBuffer ? input : fs.readFileSync(input)
   const parsed = parseObjects(buf)
@@ -447,6 +650,7 @@ export function inspectPdf(input) {
     toUnicodeMappings += mappings
     cyrillicMappings += cyrillic
     fonts.push({
+      object: num,
       baseFont,
       subtype,
       encoding,
@@ -498,6 +702,16 @@ export function inspectPdf(input) {
   // require a meaningful number of empty paints so an image-only page is not flagged.
   const textLossSuspected = emptyFillOperators >= 20 && textGlyphs <= emptyFillOperators / 4
 
+  // ---- glyph chain (only when the caller can name the source fonts) ----
+  const glyphChain = analyzeGlyphChain(parsed, { fontPaths: options.fontPaths || [] })
+  const chainByObject = new Map(glyphChain.fonts.map((entry) => [entry.object, entry]))
+  for (const font of fonts) {
+    const chain = chainByObject.get(font.object)
+    font.glyphChainChecked = chain ? chain.cidsChecked : 0
+    font.glyphChainMismatches = chain ? chain.mismatches : 0
+    font.glyphChainSourceFont = chain ? chain.sourceFont : null
+  }
+
   let verdict
   if (pageStats.length === 0) verdict = textGlyphs > 0 ? 'text' : 'outlined'
   else if (textGlyphs === 0) verdict = 'outlined'
@@ -521,7 +735,11 @@ export function inspectPdf(input) {
     hasCyrillicText: cyrillicMappings > 0,
     textLossSuspected,
     verdict,
-    malformedToUnicode
+    malformedToUnicode,
+    glyphChain,
+    glyphChainChecked: glyphChain.checked,
+    glyphChainMismatches: glyphChain.mismatches,
+    glyphMapInconsistent: glyphChain.mismatches > 0
   }
 }
 

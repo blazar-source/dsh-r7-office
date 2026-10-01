@@ -10,8 +10,21 @@ So this gate renders the produced PDF with at least two independent engines and
 compares each page, pixel by pixel, against a trusted render of the SOURCE
 Office file made by LibreOffice (a third, unrelated implementation).
 
+Engine agreement is measured RELATIVE to the reference, not against a fixed
+number. The reference is known-good by construction, so whatever two engines
+disagree about when rendering IT is renderer noise (hinting, anti-aliasing,
+sub-pixel positioning), and a produced PDF is only suspicious when it is
+noisier than that. Measured on this machine at 110 DPI, the LibreOffice
+reference for the DOCX acceptance pair scores 4.91 mean |dL| between MuPDF and
+PDFium on page 1 (2.4% of pixels differing by more than 64) while the same page
+of a correct x2t output scores 4.91 - i.e. an absolute threshold of 0.5% of
+pixels flags the trusted reference on 3 of its 5 pages and can never be
+satisfied by any correct PDF. The corrupt rendering scored 6.69 mean |dL| on
+that page, so the reference-relative rule still separates them cleanly while no
+longer failing ground truth.
+
 Usage:
-    python scripts/visual-acceptance.py <source.docx|.pptx|.xlsx> <produced.pdf> [--out DIR] [--threshold N]
+    python scripts/visual-acceptance.py <source.docx|.pptx|.xlsx> <produced.pdf> [--out DIR] [--drift N]
 
 Exit code 0 when every page agrees, 1 otherwise.
 """
@@ -119,6 +132,26 @@ def compare(a_path, b_path):
     return float(diff.mean()), float((diff > 64).mean())
 
 
+def reference_noise(ref_engines, names, page_index):
+    """Worst inter-engine mean |dL| the trusted reference itself shows on a page.
+
+    That number is by definition renderer noise, not corruption, so a produced
+    PDF is only suspicious when it is noisier than this.
+    """
+    worst = 0.0
+    available = [name for name in names if name in ref_engines]
+    if len(available) < 2:
+        available = list(ref_engines)
+    for i in range(len(available)):
+        for j in range(i + 1, len(available)):
+            first, second = ref_engines[available[i]], ref_engines[available[j]]
+            if page_index >= len(first) or page_index >= len(second):
+                continue
+            mean, _ = compare(first[page_index], second[page_index])
+            worst = max(worst, mean)
+    return worst
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("source")
@@ -127,9 +160,13 @@ def main():
     ap.add_argument("--drift", type=float, default=8.0,
                     help="max %% of pixels allowed to differ from the trusted reference "
                          "(independent renderers legitimately disagree about spacing)")
-    ap.add_argument("--disagree", type=float, default=0.5,
-                    help="max %% of pixels allowed to differ BETWEEN engines; a correct PDF "
-                         "renders identically everywhere, so this is the corruption detector")
+    ap.add_argument("--disagree-mean", type=float, default=1.5, dest="disagree_mean",
+                    help="max mean |gray delta| between two engines on a page before it counts "
+                         "as disagreement, unless the trusted reference is noisier there "
+                         "(default 1.5)")
+    ap.add_argument("--disagree-factor", type=float, default=1.3, dest="disagree_factor",
+                    help="how much noisier than the trusted reference a page may render between "
+                         "engines (default 1.3x)")
     args = ap.parse_args()
 
     source = Path(args.source).resolve()
@@ -145,12 +182,15 @@ def main():
     print(f"pdf    : {pdf}")
     print(f"outdir : {out}")
 
-    # Trusted reference: LibreOffice renders the SOURCE Office file.
+    # Trusted reference: LibreOffice renders the SOURCE Office file. It is
+    # rendered by every engine as well, because its own engine disagreement is
+    # the noise floor a correct PDF can reach on each page.
     ref_dir = out / "reference"
     ref_pdf = soffice_convert(soffice, source, "pdf", ref_dir)
     if not ref_pdf:
         sys.exit("LibreOffice could not convert the source file to PDF")
-    ref_pages = render_engines(ref_pdf, out / "reference-png").get("mupdf", [])
+    ref_engines = render_engines(ref_pdf, out / "reference-png")
+    ref_pages = ref_engines.get("mupdf") or next(iter(ref_engines.values()), [])
     if not ref_pages:
         sys.exit("no engine could render the reference PDF")
 
@@ -179,18 +219,22 @@ def main():
             if bad:
                 failures.append(("fidelity", i + 1, name, mean, strong * 100))
 
-    # A PDF that contains the right text but the wrong glyph mapping, or a fill
-    # that collapses to a solid block, still renders consistently in one engine.
-    # Two independent engines disagreeing is therefore the sharpest corruption
-    # signal available without knowing what the page should look like.
+    # A PDF that contains the right text but the wrong glyph mapping still
+    # renders consistently in one engine, so two engines disagreeing about the
+    # SAME PDF is the sharpest purely visual corruption signal available. It is
+    # judged against the same measurement on the trusted reference: independent
+    # renderers disagree at glyph edges even on a perfect PDF.
     names = list(engines)
     if len(names) > 1:
-        print(f"\n--- engine agreement (corruption detector, {args.disagree}% limit) ---")
+        print("\n--- engine agreement (corruption detector, relative to the reference) ---")
+        print(f"{'page':>4} {'engines':>16} {'meanDiff':>9} {'refMean':>8} {'limit':>7}  verdict")
         for i in range(min(len(engines[names[0]]), len(engines[names[1]]))):
             mean, strong = compare(engines[names[0]][i], engines[names[1]][i])
-            bad = strong * 100 > args.disagree
-            print(f"{i+1:>4} {names[0]} vs {names[1]}  meanDiff={mean:>7.2f}  "
-                  f"diff={strong*100:>6.2f}%  {'DISAGREE' if bad else 'ok'}")
+            ref_mean = reference_noise(ref_engines, names, i)
+            limit = max(args.disagree_mean, ref_mean * args.disagree_factor)
+            bad = mean > limit
+            print(f"{i+1:>4} {names[0] + ' vs ' + names[1]:>16} {mean:>9.2f} {ref_mean:>8.2f} "
+                  f"{limit:>7.2f}  {'DISAGREE' if bad else 'ok'}")
             if bad:
                 failures.append(("engines", i + 1, f"{names[0]}-vs-{names[1]}", mean, strong * 100))
 

@@ -4,6 +4,7 @@ import os from 'node:os'
 import { execFile, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { inspectPdf, repairToUnicodeCMaps } from './pdf-inspect.js'
+import { parseFontListPaths, writeSanitizedFontList } from './font-substitutes.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -141,6 +142,44 @@ function buildTextLossMessage(quality, allFontsPath) {
     `${quality.emptyFillOperators} glyph fills that painted nothing (verdict "${quality.verdict}"). Cause: ${cause}. ` +
     remedy +
     'Pass allowOutlinedPdf:true to keep the unusable PDF and inspect pdfTextQuality for details. ' +
+    `Output: ${quality.filePath}`
+  )
+}
+
+/**
+ * Actionable explanation for a PDF whose embedded fonts draw the wrong glyphs.
+ *
+ * This is the metric-compatible-substitute defect: x2t resolves a character's
+ * glyph id through the substitute font R7 ships (the Liberation set) while
+ * embedding the REAL font, so every character whose index differs between the
+ * two is drawn from the wrong slot. The text layer is unaffected, which is why
+ * text extraction and a text-only check both pass.
+ */
+function buildGlyphMismatchMessage(quality) {
+  const chain = quality.glyphChain || { fonts: [], mismatches: 0, cidsChecked: 0 }
+  const offenders = chain.fonts.filter((font) => font.mismatches > 0)
+  const detail = offenders
+    .slice(0, 4)
+    .map((font) => {
+      const example = font.examples && font.examples[0]
+      const sample = example
+        ? ` — CID ${example.cid} "${example.character}" draws glyph ${example.drawnGid}, ` +
+          `but that character is glyph ${example.expectedGid} in ${font.sourceFont}`
+        : ''
+      return `${font.baseFont || `object ${font.object}`}: ${font.mismatches}/${font.cidsChecked} characters${sample}`
+    })
+    .join('; ')
+
+  return (
+    `R7 x2t produced a PDF whose embedded fonts map text to the wrong glyphs: ` +
+    `${chain.mismatches} of ${chain.cidsChecked} checked characters draw a different outline than the ` +
+    `character the text layer names (${detail}). The document's text extracts correctly, so only ` +
+    `rendering shows it. Cause: x2t numbers glyphs with the metric-compatible substitute in the font ` +
+    `list (Liberation Sans for Arial and so on) but embeds the real font, so non-Latin text comes out ` +
+    `as unrelated Latin/Greek shapes. Remedy: the converted font list already redirects each substitute ` +
+    `entry at the real font; this PDF still came back inconsistent, so the substitute could not be ` +
+    `redirected on this host (the real font is probably missing). ` +
+    'Pass allowGlyphMismatchPdf:true to keep the PDF and inspect pdfTextQuality.glyphChain for details. ' +
     `Output: ${quality.filePath}`
   )
 }
@@ -299,6 +338,8 @@ export class R7Adapter {
    * @param {string} [options.allFontsPath] - explicit AllFonts.js override
    * @param {boolean} [options.repairTextMaps=true] - repair malformed ToUnicode CMaps
    * @param {boolean} [options.allowOutlinedPdf=false] - accept a PDF with no text
+   * @param {boolean} [options.allowGlyphMismatchPdf=false] - accept a PDF whose
+   *   embedded fonts provably draw glyphs other than the ones the text names
    * @param {number} [options.timeoutMs=120000]
    * @returns {Promise<object>}
    */
@@ -317,16 +358,21 @@ export class R7Adapter {
 
     const timeoutMs = options.timeoutMs ?? 120000
     const allFontsPath = options.allFontsPath || this.findAllFontsJs()
+    const fontList = this.prepareFontList(allFontsPath, { sanitize: options.sanitizeFontList !== false })
+    const x2tFontListPath = fontList && fontList.path ? fontList.path : allFontsPath
     const startTime = Date.now()
     const failures = []
     let mode = null
 
     // Preferred path: the params-XML form with an explicit font list. The plain
     // two-argument form silently falls back to the install's 0-byte AllFonts.js
-    // stub and loses every glyph outline.
-    if (allFontsPath) {
+    // stub and loses every glyph outline. The list is first rewritten so that a
+    // metric-compatible substitute cannot shadow the real font (see
+    // font-substitutes.js) — that shadowing is what makes x2t draw Cyrillic with
+    // the wrong glyphs.
+    if (x2tFontListPath) {
       try {
-        await this._runParamsXml(info.x2tPath, sourcePath, target, allFontsPath, timeoutMs)
+        await this._runParamsXml(info.x2tPath, sourcePath, target, x2tFontListPath, timeoutMs)
         mode = 'params-xml'
       } catch (err) {
         failures.push(`params-xml: ${err.message}`)
@@ -353,6 +399,13 @@ export class R7Adapter {
       mode,
       allFontsPath: allFontsPath || null
     }
+    if (fontList && fontList.sanitized) {
+      result.fontList = {
+        original: allFontsPath || null,
+        used: fontList.path,
+        rewrites: fontList.rewrites
+      }
+    }
 
     if (path.extname(target).toLowerCase() === '.pdf') {
       let repairs = []
@@ -365,11 +418,20 @@ export class R7Adapter {
       }
       result.textMapRepairs = repairs
 
-      const quality = this.pdfTextQuality(target)
+      const quality = this.pdfTextQuality(target, { fontPaths: fontList ? fontList.fontPaths : [] })
       result.pdfTextQuality = quality
 
       if (quality.textLossSuspected && !options.allowOutlinedPdf) {
         const error = new Error(buildTextLossMessage(quality, allFontsPath))
+        error.pdfTextQuality = quality
+        error.target = target
+        throw error
+      }
+
+      // Extracting correctly is not rendering correctly: fail loudly rather than
+      // hand back a PDF whose glyphs are provably not the ones the text names.
+      if (quality.glyphMapInconsistent && options.allowGlyphMismatchPdf !== true) {
+        const error = new Error(buildGlyphMismatchMessage(quality))
         error.pdfTextQuality = quality
         error.target = target
         throw error
@@ -380,12 +442,52 @@ export class R7Adapter {
   }
 
   /**
+   * Read the font list x2t will be given and plan the substitute rewrite.
+   * @param {string|null} allFontsPath
+   * @param {object} [options]
+   * @param {boolean} [options.sanitize=true] rewrite metric-compatible substitutes
+   *   so they cannot shadow the real font. Disabling it is an escape hatch: the
+   *   glyph-chain check still refuses to return a PDF it can prove is wrong.
+   * @returns {{original: string, path: string|null, fontPaths: string[], rewrites: Array<{from:string,to:string}>, sanitized: boolean}|null}
+   */
+  prepareFontList(allFontsPath, options = {}) {
+    if (!allFontsPath) return null
+    let fontPaths
+    try {
+      fontPaths = parseFontListPaths(fs.readFileSync(allFontsPath, 'utf8'))
+    } catch {
+      return null
+    }
+    let sanitized = null
+    if (options.sanitize !== false) {
+      try {
+        sanitized = writeSanitizedFontList(allFontsPath)
+      } catch {
+        sanitized = null
+      }
+    }
+    if (!sanitized) {
+      return { original: allFontsPath, path: null, fontPaths, rewrites: [], sanitized: false }
+    }
+    return {
+      original: allFontsPath,
+      path: sanitized.path,
+      fontPaths: sanitized.fontPaths.length ? sanitized.fontPaths : fontPaths,
+      rewrites: sanitized.rewrites,
+      sanitized: true
+    }
+  }
+
+  /**
    * Measure the text fidelity of a produced PDF (see pdf-inspect.js).
    * @param {string} pdfPath
+   * @param {object} [options]
+   * @param {string[]} [options.fontPaths] candidate source fonts, enabling the
+   *   glyph-chain check that catches "extracts fine, renders garbage".
    * @returns {ReturnType<typeof inspectPdf>}
    */
-  pdfTextQuality(pdfPath) {
-    return inspectPdf(pdfPath)
+  pdfTextQuality(pdfPath, options = {}) {
+    return inspectPdf(pdfPath, options)
   }
 
   async _runCliArgs(x2tPath, sourcePath, targetPath, timeoutMs) {

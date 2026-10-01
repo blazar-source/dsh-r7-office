@@ -134,17 +134,27 @@ export function buildR7Tools(options = {}) {
 
     {
       name: 'r7_convert',
-      description: 'Convert document to PDF, HTML, TXT, DOCX, XLSX, or PPTX using R7 native converter (x2t).',
+      description: 'Convert document to PDF, HTML, TXT, DOCX, XLSX, or PPTX using R7 native converter (x2t). XLSX to PDF exports EVERY worksheet by default, in tab order; pass sheetName (or allSheets: false) to export one sheet only.',
       parameters: {
         type: 'object',
         required: ['sourcePath', 'targetPath'],
         properties: {
           sourcePath: { type: 'string', description: 'Absolute or workspace-relative path to source document.' },
-          targetPath: { type: 'string', description: 'Target destination file path (e.g. document.pdf, report.html).' }
+          targetPath: { type: 'string', description: 'Target destination file path (e.g. document.pdf, report.html).' },
+          allSheets: { type: 'boolean', description: 'XLSX to PDF only: export every worksheet, in tab order. Default true. Set false to export just the active (first) sheet.' },
+          sheetName: { type: 'string', description: 'XLSX to PDF only: export just this worksheet. Takes precedence over allSheets.' }
         }
       },
       output: defaultOutput(),
-      async execute({ sourcePath, targetPath }) {
+      async execute({ sourcePath, targetPath, allSheets, sheetName }) {
+        // x2t renders one worksheet per run (whichever tab the workbook marks
+        // active), so a spreadsheet render is driven per sheet by the XLSX
+        // engine; every other conversion stays a plain x2t call.
+        const sourceExt = path.extname(sourcePath).toLowerCase()
+        const targetExt = path.extname(targetPath).toLowerCase()
+        if (targetExt === '.pdf' && ['.xlsx', '.xlsm', '.xls'].includes(sourceExt)) {
+          return await xlsxEngine.exportPdf(sourcePath, { outputPath: targetPath, allSheets, sheetName })
+        }
         return await adapter.convert(sourcePath, targetPath)
       }
     },

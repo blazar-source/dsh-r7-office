@@ -65,15 +65,15 @@ export function buildXlsxTools(xlsxEngine) {
 
     {
       name: 'r7_sheet_format',
-      description: 'Apply formatting to a cell or range in an XLSX worksheet: font, fill, borders, alignment, number format, merge, column width and row height. Values, formulas and unrelated styles are preserved.',
+      description: 'Apply formatting to a cell or range in an XLSX worksheet: font, fill, borders, alignment, number format, merge, column width and row height. Values, formulas and unrelated styles are preserved. A sheet\'s print layout (fit-to-width so a table does not spill onto another page, orientation, paper, margins, centring) can be written in the same call with pageSetup.',
       parameters: {
         type: 'object',
-        required: ['filePath', 'range'],
+        required: ['filePath'],
         properties: {
           filePath: { type: 'string', description: 'Path to XLSX file.' },
           sheetIndex: { type: 'integer', description: '0-based sheet index.' },
           sheetName: { type: 'string', description: 'Sheet name (takes precedence over sheetIndex).' },
-          range: { type: 'string', description: 'Cell or range to format, e.g. "B2" or "A1:D10".' },
+          range: { type: 'string', description: 'Cell or range to format, e.g. "B2" or "A1:D10". Optional when pageSetup is given.' },
           font: {
             type: 'object',
             description: 'Font settings.',
@@ -137,6 +137,35 @@ export function buildXlsxTools(xlsxEngine) {
             }
           },
           rowHeight: { type: 'number', description: 'Height in points for every row in the range.' },
+          pageSetup: {
+            type: 'object',
+            description: 'Print layout for this sheet, written in the same save as the formatting. Use { fitToWidth: 1, fitToHeight: 0 } to keep a table one page wide with as many pages tall as it needs; fitToPage="1" is written automatically, without which fitToWidth is ignored by every renderer.',
+            properties: {
+              orientation: { type: 'string', enum: ['portrait', 'landscape'], description: 'Page orientation.' },
+              fitToWidth: { type: 'integer', description: 'Pages wide; 1 keeps every column on one page. 0 = as many as needed.' },
+              fitToHeight: { type: 'integer', description: 'Pages tall; 0 = as many as needed (the usual pairing with fitToWidth: 1).' },
+              fitToPage: { type: 'boolean', description: 'Scale the sheet down to fit. Forced on when fitToWidth/fitToHeight is given.' },
+              scale: { type: 'integer', description: 'Fixed print scale 10..400 (ignored, and dropped, when fit-to-page is on).' },
+              paperSize: { description: 'Paper size name ("A4", "A3", "Letter", …) or an OOXML paper size id.' },
+              margins: {
+                type: 'object',
+                description: 'Margins in inches; omitted values take the defaults.',
+                properties: {
+                  left: { type: 'number' },
+                  right: { type: 'number' },
+                  top: { type: 'number' },
+                  bottom: { type: 'number' },
+                  header: { type: 'number' },
+                  footer: { type: 'number' }
+                }
+              },
+              centerHorizontally: { type: 'boolean', description: 'Centre the printed sheet horizontally.' },
+              centerVertically: { type: 'boolean', description: 'Centre the printed sheet vertically.' },
+              firstPageNumber: { type: 'integer', description: 'Printed page number of the first page.' },
+              blackAndWhite: { type: 'boolean', description: 'Print without colour.' },
+              draft: { type: 'boolean', description: 'Print in draft quality.' }
+            }
+          },
           outputPath: { type: 'string', description: 'Optional target path.' }
         }
       },

@@ -11,6 +11,11 @@
  * cross-sheet formulas, mixed alignment and per-column widths — because that is
  * what breaks a spreadsheet writer.
  *
+ * It also carries a print layout for every sheet (fit-to-width so no column
+ * spills onto a page of its own, landscape, A4, a print area over the used
+ * range and the title rows repeating), and the render at the end exports ALL
+ * THREE sheets into one PDF, in tab order — the default for the XLSX engine.
+ *
  * Run: node examples/xlsx-acceptance.js [outputDirectory]
  * Default output directory: <os.tmpdir()>/r7-acceptance
  */
@@ -370,21 +375,82 @@ check('the expense sheet is independent of the income sheet',
   expenses.data[0][0] === 'Расходы за I квартал 2026 года'
   && expenses.data[2][1] === 'ФОТ')
 
+// -------------------------------------------------------------- print layout
+
+console.log('\n9. Setting the print layout on every sheet...')
+
+// fitToWidth: 1 with fitToHeight: 0 is the fix for "column D lands on page 2":
+// the table is squeezed to one page wide while staying as many pages tall as it
+// needs. The engine writes <sheetPr><pageSetUpPr fitToPage="1"/></sheetPr> with
+// it — without that switch a renderer ignores fitToWidth entirely.
+const printLayout = {
+  orientation: 'landscape',
+  fitToWidth: 1,
+  fitToHeight: 0,
+  paperSize: 'A4',
+  margins: { left: 0.5, right: 0.5, top: 0.6, bottom: 0.6 },
+  centerHorizontally: true
+}
+
+const layouts = [
+  { sheetName: INCOME, printArea: `A1:D${incomeTotalRow}` },
+  { sheetName: EXPENSES, printArea: `A1:D${expenseTotalRow}` },
+  { sheetName: SUMMARY, printArea: 'A1:E6' }
+]
+
+for (const target of layouts) {
+  const result = await xlsx.setPageSetup(bookPath, {
+    ...printLayout,
+    ...target,
+    printTitles: '1:2'
+  })
+  check(`"${target.sheetName}" fits one page wide with the header rows repeating`,
+    result.pageSetup.fitToPage === true
+    && result.pageSetup.fitToWidth === 1
+    && result.pageSetup.fitToHeight === 0
+    && result.printArea === `${target.sheetName}!${target.printArea.replace(/([A-Z])(\d+)/g, '$$$1$$$2')}`
+    && result.printTitles === `${target.sheetName}!$1:$2`,
+    `fit ${result.pageSetup.fitToWidth}x${result.pageSetup.fitToHeight} on ${result.pageSetup.paperSizeName}, `
+    + `area ${result.printArea}, titles ${result.printTitles}`)
+}
+
+const laidOut = await xlsx.inspect(bookPath)
+check('every sheet reports its print layout back',
+  laidOut.sheets.every((s) => s.pageSetup.fitToPage === true
+    && s.pageSetup.fitToWidth === 1
+    && s.pageSetup.fitToHeight === 0
+    && s.pageSetup.orientation === 'landscape'),
+  laidOut.sheets.map((s) => `${s.name}: ${s.pageSetup.orientation} ${s.pageSetup.fitToWidth}x${s.pageSetup.fitToHeight}`).join('; '))
+
 // ----------------------------------------------------------------- rendering
 
-console.log('\n9. Rendering through the R7 engine...')
+console.log('\n10. Rendering EVERY sheet through the R7 engine...')
 const r7 = await adapter.detect()
 let renderedPdf = null
 if (!r7.installed) {
   check('R7 x2t is installed', false, 'not detected on this host — the PDF was not produced')
 } else {
   const started = Date.now()
-  await adapter.convert(bookPath, pdfPath)
+  const exported = await xlsx.exportPdf(bookPath, { outputPath: pdfPath })
   renderedPdf = pdfPath
   const head = fs.readFileSync(pdfPath).subarray(0, 1024)
   check('the workbook renders to a PDF that starts with %PDF-',
     head.includes(Buffer.from('%PDF-')),
     `${fs.statSync(pdfPath).size} bytes in ${Date.now() - started}ms`)
+
+  check('allSheets is the default and every worksheet was exported',
+    exported.allSheets === true
+    && exported.sheets.length === 3
+    && exported.sheets.every((s) => s.name),
+    exported.sheets.map((s) => s.name).join(' → '))
+
+  check('each sheet fits on a single page, so no column spills onto its own page',
+    exported.sheets.every((s) => s.pages === 1),
+    exported.sheets.map((s) => `${s.name}: ${s.pages}p`).join('; '))
+
+  check('the PDF holds one page per sheet, in tab order',
+    exported.pageCount === 3,
+    `${exported.pageCount} pages for ${exported.sheets.length} sheets`)
 }
 
 // ------------------------------------------------------------------- summary

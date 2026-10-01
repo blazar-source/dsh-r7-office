@@ -528,3 +528,497 @@ export function estimateColumnWidth(values, minWidth = 8) {
   }
   return Math.min(Math.max(longest + 2, minWidth), 255)
 }
+
+// --------------------------------------------------------------------------
+// Page setup
+// --------------------------------------------------------------------------
+//
+// A worksheet that is printed correctly needs four separate elements, and the
+// one everybody forgets is the first: `<sheetPr><pageSetUpPr fitToPage="1"/>
+// </sheetPr>`. `fitToWidth` on its own is *inert* — every renderer, R7's x2t
+// included, ignores it unless the sheet also declares fitToPage, which is why
+// "set fitToWidth and the column still spilled onto page 2" happens.
+//
+// The second thing that breaks a hand-written page setup is element order: the
+// `CT_Worksheet` sequence puts printOptions, pageMargins and pageSetup *after*
+// sheetData/mergeCells, and put in the wrong place they are silently dropped
+// (or make the part invalid). Order is therefore enforced here, not by callers.
+
+/**
+ * The `CT_Worksheet` child sequence from ECMA-376.
+ *
+ * Only the element names are kept, in schema order; an element this module
+ * writes is positioned by its rank in this list.
+ */
+const WORKSHEET_ELEMENT_ORDER = [
+  'sheetPr', 'dimension', 'sheetViews', 'sheetFormatPr', 'cols', 'sheetData',
+  'sheetCalcPr', 'sheetProtection', 'protectedRanges', 'scenarios', 'autoFilter',
+  'sortState', 'dataConsolidate', 'customSheetViews', 'mergeCells', 'phoneticPr',
+  'conditionalFormatting', 'dataValidations', 'hyperlinks', 'printOptions',
+  'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks', 'colBreaks',
+  'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing',
+  'legacyDrawing', 'legacyDrawingHF', 'picture', 'oleObjects', 'controls',
+  'webPublishItems', 'tableParts', 'extLst'
+]
+
+/** Attribute order of `CT_PageSetup` (cosmetic, but stable output helps reviews). */
+const PAGE_SETUP_ATTRIBUTES = [
+  'paperSize', 'scale', 'firstPageNumber', 'fitToWidth', 'fitToHeight',
+  'pageOrder', 'orientation', 'usePrinterDefaults', 'blackAndWhite', 'draft',
+  'cellComments', 'useFirstPageNumber', 'horizontalDpi', 'verticalDpi',
+  'copies', 'r:id'
+]
+
+/** Attribute order of `CT_PageMargins`. Every attribute is required. */
+const PAGE_MARGIN_ATTRIBUTES = ['left', 'right', 'top', 'bottom', 'header', 'footer']
+
+/** Attribute order of `CT_PrintOptions`. */
+const PRINT_OPTION_ATTRIBUTES = [
+  'horizontalCentered', 'verticalCentered', 'headings', 'gridLines', 'gridLinesSet'
+]
+
+/** Margins a sheet gets when the caller asks for margins but not their values. */
+export const DEFAULT_PAGE_MARGINS = {
+  left: 0.7,
+  right: 0.7,
+  top: 0.75,
+  bottom: 0.75,
+  header: 0.3,
+  footer: 0.3
+}
+
+/** OOXML paper-size identifiers for the sizes a caller is likely to name. */
+const PAPER_SIZE_IDS = {
+  letter: 1,
+  letterSmall: 2,
+  tabloid: 3,
+  ledger: 4,
+  legal: 5,
+  statement: 6,
+  executive: 7,
+  a3: 8,
+  a4: 9,
+  a4Small: 10,
+  a5: 11,
+  b4: 12,
+  b5: 13,
+  folio: 14,
+  quarto: 15,
+  a2: 66,
+  a1: 67
+}
+
+/** The inverse of {@link PAPER_SIZE_IDS}, for reporting a size back. */
+const PAPER_SIZE_NAMES = {
+  1: 'Letter',
+  2: 'Letter Small',
+  3: 'Tabloid',
+  4: 'Ledger',
+  5: 'Legal',
+  6: 'Statement',
+  7: 'Executive',
+  8: 'A3',
+  9: 'A4',
+  10: 'A4 Small',
+  11: 'A5',
+  12: 'B4',
+  13: 'B5',
+  14: 'Folio',
+  15: 'Quarto',
+  66: 'A2',
+  67: 'A1'
+}
+
+/** The schema rank of a worksheet child; unknown names sort last. */
+function elementRank(tagName) {
+  const rank = WORKSHEET_ELEMENT_ORDER.indexOf(tagName)
+  return rank === -1 ? WORKSHEET_ELEMENT_ORDER.length : rank
+}
+
+/** The name of an element's own opening tag (`<sheetPr …>` -> `sheetPr`). */
+function tagNameOf(tagXml) {
+  const match = String(tagXml).match(/^<([^\s/>]+)/)
+  return match ? match[1] : null
+}
+
+/**
+ * Re-emit an opening tag with attributes merged and ordered.
+ *
+ * Attributes the caller does not mention survive — a page setup edit must not
+ * drop a `paperSize` that was already there — and an attribute mapped to
+ * `null` is removed.
+ *
+ * @param {string} tagXml - an opening tag, self-closing or not
+ * @param {object} updates - attribute name to value, or null to remove
+ * @param {string[]} order - the order known attributes are written in
+ * @returns {string}
+ */
+function mergeTagAttributes(tagXml, updates, order) {
+  const selfClosing = tagXml.endsWith('/>')
+  const name = tagNameOf(tagXml)
+  const bare = selfClosing ? tagXml.slice(0, -2) : tagXml.slice(0, -1)
+  const body = bare.slice(1 + name.length)
+
+  const attributes = new Map()
+  for (const m of body.matchAll(/([^\s=]+)\s*=\s*"([^"]*)"/g)) attributes.set(m[1], m[2])
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === null || value === undefined) attributes.delete(key)
+    else attributes.set(key, String(value))
+  }
+
+  const written = new Set()
+  const parts = []
+  for (const key of order) {
+    if (!attributes.has(key)) continue
+    parts.push(`${key}="${escapeXml(attributes.get(key))}"`)
+    written.add(key)
+  }
+  for (const [key, value] of attributes) {
+    if (written.has(key)) continue
+    parts.push(`${key}="${escapeXml(value)}"`)
+  }
+
+  return `<${name}${parts.length > 0 ? ` ${parts.join(' ')}` : ''}${selfClosing ? '/>' : '>'}`
+}
+
+/**
+ * Replace an element, or insert it where the worksheet schema requires it.
+ *
+ * @param {string} sheetXml
+ * @param {string} tagName
+ * @param {string} elementXml
+ * @returns {string}
+ */
+export function upsertWorksheetElement(sheetXml, tagName, elementXml) {
+  const existing = extractElements(sheetXml, tagName)
+  if (existing.length > 0) return sheetXml.replace(existing[0].outerXml, elementXml)
+
+  const rank = elementRank(tagName)
+  // Insert directly after the last element that must precede this one. A
+  // repeated element (conditionalFormatting) is measured at its last
+  // occurrence, which is where its run ends.
+  let anchor = -1
+  for (const tag of WORKSHEET_ELEMENT_ORDER) {
+    if (elementRank(tag) >= rank) break
+    const found = extractElements(sheetXml, tag)
+    if (found.length === 0) continue
+    const last = found[found.length - 1]
+    anchor = Math.max(anchor, last.index + last.outerXml.length)
+  }
+
+  if (anchor === -1) {
+    // Nothing precedes it: sheetPr is the only element this module writes that
+    // belongs here, and it must be the worksheet's first child.
+    const open = sheetXml.match(/<worksheet(?=[\s>])[^>]*>/)
+    if (!open) throw new Error('Invalid worksheet: no <worksheet> element to insert into')
+    anchor = open.index + open[0].length
+  }
+
+  return sheetXml.slice(0, anchor) + elementXml + sheetXml.slice(anchor)
+}
+
+/**
+ * Remove every occurrence of an element.
+ * @param {string} sheetXml
+ * @param {string} tagName
+ * @returns {string}
+ */
+export function removeWorksheetElement(sheetXml, tagName) {
+  let out = sheetXml
+  for (const element of extractElements(sheetXml, tagName)) {
+    out = out.replace(element.outerXml, '')
+  }
+  return out
+}
+
+/**
+ * Mark (or unmark) the sheet's tab as selected in the workbook window.
+ *
+ * A workbook records its active tab twice: `<workbookView activeTab="N">` in
+ * `workbook.xml` and `tabSelected="1"` on the sheet's own `<sheetView>`. A file
+ * produced by copying another sheet's shell — which is what `addSheet` does —
+ * ends up with every sheet claiming to be selected, so a per-sheet render has
+ * to set both, consistently.
+ *
+ * @param {string} sheetXml
+ * @param {boolean} selected
+ * @returns {string}
+ */
+export function setTabSelected(sheetXml, selected) {
+  const views = extractElements(sheetXml, 'sheetViews')[0]
+  if (!views) {
+    if (!selected) return sheetXml
+    return upsertWorksheetElement(
+      sheetXml,
+      'sheetViews',
+      '<sheetViews><sheetView tabSelected="1" workbookViewId="0"/></sheetViews>'
+    )
+  }
+
+  const viewsXml = views.outerXml
+  const view = extractElements(viewsXml, 'sheetView')[0]
+  if (!view) {
+    return sheetXml.replace(viewsXml, '<sheetViews><sheetView tabSelected="1" workbookViewId="0"/></sheetViews>')
+  }
+
+  const updated = mergeTagAttributes(
+    view.outerXml,
+    { tabSelected: selected ? '1' : null },
+    ['showGridLines', 'showRowColHeaders', 'showZeros', 'rightToLeft', 'tabSelected',
+      'showRuler', 'showOutlineSymbols', 'defaultGridColor', 'showFormulas', 'view',
+      'topLeftCell', 'colorId', 'zoomScale', 'zoomScaleNormal', 'zoomScaleSheetLayoutView',
+      'zoomScalePageLayoutView', 'workbookViewId']
+  )
+  return sheetXml.replace(view.outerXml, updated)
+}
+
+/** Coerce a request value to a non-negative integer, or throw. */
+function intOption(value, name, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const number = Number(value)
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw new Error(`Invalid ${name}: ${value} (expected an integer between ${min} and ${max})`)
+  }
+  return number
+}
+
+/** Resolve a paper size given as an OOXML id or as a name such as "A4". */
+function resolvePaperSize(paperSize) {
+  if (paperSize === null || paperSize === undefined) return null
+  if (typeof paperSize === 'string' && !/^\d+$/.test(paperSize.trim())) {
+    const key = paperSize.trim().toLowerCase().replace(/[\s-]/g, '')
+    const id = PAPER_SIZE_IDS[key]
+    if (id === undefined) {
+      throw new Error(`Unknown paper size "${paperSize}". Known names: ${Object.keys(PAPER_SIZE_IDS).join(', ')}, or an OOXML paper size id`)
+    }
+    return id
+  }
+  return intOption(paperSize, 'paperSize', { min: 1, max: 118 })
+}
+
+/**
+ * Write a sheet's print layout: fit-to-page, orientation, paper, margins and
+ * centring.
+ *
+ * `fitToWidth`/`fitToHeight` always bring `fitToPage` with them, because
+ * without `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` a renderer ignores
+ * both. `fitToHeight: 0` means "as many pages tall as it takes", which is the
+ * usual pairing with `fitToWidth: 1` and a very easy thing to get wrong.
+ *
+ * A dimension the caller does not mention keeps whatever the sheet already
+ * declares; when the sheet declares nothing, it is written as 0 rather than
+ * left to the schema default of 1, which would fit the sheet onto one page in
+ * both directions.
+ *
+ * @param {string} sheetXml
+ * @param {object} [spec]
+ * @param {'portrait'|'landscape'} [spec.orientation]
+ * @param {number} [spec.fitToWidth] - pages wide (0 = as many as needed)
+ * @param {number} [spec.fitToHeight] - pages tall (0 = as many as needed)
+ * @param {boolean} [spec.fitToPage] - forced on by fitToWidth/fitToHeight
+ * @param {number} [spec.scale] - 10..100+ print scale; ignored when fitting
+ * @param {number|string} [spec.paperSize] - id or a name such as "A4"
+ * @param {object} [spec.margins] - inches; missing values take the defaults
+ * @param {boolean} [spec.centerHorizontally]
+ * @param {boolean} [spec.centerVertically]
+ * @param {number} [spec.firstPageNumber]
+ * @param {boolean} [spec.blackAndWhite]
+ * @param {boolean} [spec.draft]
+ * @returns {string} the updated worksheet XML
+ */
+export function setPageSetup(sheetXml, spec = {}) {
+  const {
+    orientation = null,
+    fitToWidth = null,
+    fitToHeight = null,
+    fitToPage = null,
+    scale = null,
+    paperSize = null,
+    margins = null,
+    centerHorizontally = null,
+    centerVertically = null,
+    firstPageNumber = null,
+    blackAndWhite = null,
+    draft = null
+  } = spec
+
+  let out = sheetXml
+
+  const wantsFit = fitToWidth !== null || fitToHeight !== null
+  const fit = fitToPage === null ? wantsFit : fitToPage === true
+  // Fit and a fixed scale describe the same thing two different ways; a
+  // renderer uses the fit and drops the scale, so the scale is dropped here
+  // rather than left behind to confuse the next reader of the file.
+  const effectiveScale = fit ? null : scale
+
+  // 1. sheetPr/pageSetUpPr — the switch that makes fitToWidth mean anything.
+  if (fit) {
+    const sheetPr = extractElements(out, 'sheetPr')[0]
+    if (sheetPr) {
+      const pr = extractElements(sheetPr.outerXml, 'pageSetUpPr')[0]
+      const updatedPr = pr
+        ? mergeTagAttributes(pr.outerXml, { fitToPage: '1' }, ['autoPageBreaks', 'fitToPage'])
+        : '<pageSetUpPr fitToPage="1"/>'
+      const updatedSheetPr = pr
+        // pageSetUpPr is the last child of CT_SheetPr.
+        ? sheetPr.outerXml.replace(pr.outerXml, updatedPr)
+        : sheetPr.outerXml.replace('</sheetPr>', `${updatedPr}</sheetPr>`)
+      out = out.replace(sheetPr.outerXml, updatedSheetPr)
+    } else {
+      out = upsertWorksheetElement(out, 'sheetPr', '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>')
+    }
+  } else if (fitToPage === false) {
+    const sheetPr = extractElements(out, 'sheetPr')[0]
+    const pr = sheetPr ? extractElements(sheetPr.outerXml, 'pageSetUpPr')[0] : null
+    // The empty <sheetPr/> is left in place: removing a container the caller
+    // never mentioned would churn the part beyond the requested change.
+    if (pr) out = out.replace(pr.outerXml, '')
+  }
+
+  // 2. pageSetup — orientation, paper, fit and the rest of the print switches.
+  const pageSetupUpdates = {}
+  if (orientation !== null) {
+    const value = String(orientation).toLowerCase()
+    if (value !== 'portrait' && value !== 'landscape') {
+      throw new Error(`Invalid orientation: ${orientation} (expected "portrait" or "landscape")`)
+    }
+    pageSetupUpdates.orientation = value
+  }
+  if (wantsFit) {
+    if (!fit) {
+      // A renderer ignores the fit values without fitToPage, so leaving them
+      // behind would only mislead the next reader.
+      pageSetupUpdates.fitToWidth = null
+      pageSetupUpdates.fitToHeight = null
+    } else {
+      const existingTag = extractElements(out, 'pageSetup')[0]?.outerXml ?? ''
+      // A dimension the caller does not mention keeps the value already in the
+      // sheet. When nothing is known at all it is written as 0 — "as many pages
+      // as it needs" — because the schema default of 1 would silently squeeze
+      // the sheet onto a single page in *both* directions.
+      const dimension = (requested, attribute) => {
+        if (requested !== null && requested !== undefined) {
+          return intOption(requested, attribute, { min: 0, max: 32767 })
+        }
+        const present = attr(existingTag, attribute)
+        return present === null || present === undefined ? 0 : Number(present)
+      }
+      pageSetupUpdates.fitToWidth = dimension(fitToWidth, 'fitToWidth')
+      pageSetupUpdates.fitToHeight = dimension(fitToHeight, 'fitToHeight')
+    }
+  }
+  if (scale !== null) {
+    pageSetupUpdates.scale = effectiveScale === null ? null : intOption(effectiveScale, 'scale', { min: 10, max: 400 })
+  }
+  if (paperSize !== null) pageSetupUpdates.paperSize = resolvePaperSize(paperSize)
+  if (firstPageNumber !== null && firstPageNumber !== undefined) {
+    pageSetupUpdates.firstPageNumber = intOption(firstPageNumber, 'firstPageNumber', { min: 0, max: 32767 })
+  }
+  if (blackAndWhite !== null && blackAndWhite !== undefined) {
+    pageSetupUpdates.blackAndWhite = blackAndWhite ? '1' : null
+  }
+  if (draft !== null && draft !== undefined) {
+    pageSetupUpdates.draft = draft ? '1' : null
+  }
+
+  if (Object.keys(pageSetupUpdates).length > 0) {
+    const existing = extractElements(out, 'pageSetup')[0]
+    const xml = existing
+      ? mergeTagAttributes(existing.outerXml, pageSetupUpdates, PAGE_SETUP_ATTRIBUTES)
+      : mergeTagAttributes('<pageSetup/>', pageSetupUpdates, PAGE_SETUP_ATTRIBUTES)
+    out = upsertWorksheetElement(out, 'pageSetup', xml)
+  }
+
+  // 3. printOptions — centring on the page.
+  if (centerHorizontally !== null || centerVertically !== null) {
+    const updates = {}
+    if (centerHorizontally !== null) updates.horizontalCentered = centerHorizontally ? '1' : null
+    if (centerVertically !== null) updates.verticalCentered = centerVertically ? '1' : null
+    const existing = extractElements(out, 'printOptions')[0]
+    const xml = existing
+      ? mergeTagAttributes(existing.outerXml, updates, PRINT_OPTION_ATTRIBUTES)
+      : mergeTagAttributes('<printOptions/>', updates, PRINT_OPTION_ATTRIBUTES)
+    out = upsertWorksheetElement(out, 'printOptions', xml)
+  }
+
+  // 4. pageMargins — every attribute is required, so absent values take the
+  // defaults rather than being omitted.
+  if (margins !== null && margins !== undefined) {
+    if (typeof margins !== 'object' || Array.isArray(margins)) {
+      throw new Error('Invalid margins: expected an object such as { left: 0.7, right: 0.7 }')
+    }
+    const resolved = { ...DEFAULT_PAGE_MARGINS }
+    for (const key of PAGE_MARGIN_ATTRIBUTES) {
+      if (margins[key] === undefined || margins[key] === null) continue
+      const value = Number(margins[key])
+      if (!Number.isFinite(value) || value < 0) {
+        throw new Error(`Invalid margin "${key}": ${margins[key]} (expected a non-negative number of inches)`)
+      }
+      resolved[key] = value
+    }
+    const existing = extractElements(out, 'pageMargins')[0]
+    const xml = existing
+      ? mergeTagAttributes(existing.outerXml, resolved, PAGE_MARGIN_ATTRIBUTES)
+      : `<pageMargins ${PAGE_MARGIN_ATTRIBUTES.map((k) => `${k}="${resolved[k]}"`).join(' ')}/>`
+    out = upsertWorksheetElement(out, 'pageMargins', xml)
+  }
+
+  return out
+}
+
+/**
+ * Read a sheet's print layout back.
+ *
+ * Every key is always present; a value that the sheet does not declare is
+ * `null`, so "no page setup at all" is distinguishable from "portrait".
+ *
+ * @param {string} sheetXml
+ * @returns {object}
+ */
+export function getPageSetup(sheetXml) {
+  const sheetPr = extractElements(sheetXml, 'sheetPr')[0]
+  const pageSetUpPr = sheetPr ? extractElements(sheetPr.outerXml, 'pageSetUpPr')[0] : null
+  const pageSetup = extractElements(sheetXml, 'pageSetup')[0]
+  const margins = extractElements(sheetXml, 'pageMargins')[0]
+  const printOptions = extractElements(sheetXml, 'printOptions')[0]
+  const setupTag = pageSetup ? pageSetup.outerXml : ''
+
+  const numberOrNull = (tag, name) => {
+    const value = attr(tag, name)
+    return value === null || value === undefined ? null : Number(value)
+  }
+  const boolOrNull = (tag, name) => {
+    const value = attr(tag, name)
+    if (value === null || value === undefined) return null
+    return value === '1' || value === 'true'
+  }
+
+  const paperSizeId = numberOrNull(setupTag, 'paperSize')
+
+  return {
+    fitToPage: pageSetUpPr ? boolOrNull(pageSetUpPr.outerXml, 'fitToPage') : null,
+    orientation: attr(setupTag, 'orientation'),
+    fitToWidth: numberOrNull(setupTag, 'fitToWidth'),
+    fitToHeight: numberOrNull(setupTag, 'fitToHeight'),
+    scale: numberOrNull(setupTag, 'scale'),
+    paperSize: paperSizeId,
+    paperSizeName: paperSizeId === null ? null : (PAPER_SIZE_NAMES[paperSizeId] ?? null),
+    firstPageNumber: numberOrNull(setupTag, 'firstPageNumber'),
+    blackAndWhite: boolOrNull(setupTag, 'blackAndWhite'),
+    draft: boolOrNull(setupTag, 'draft'),
+    margins: margins
+      ? Object.fromEntries(PAGE_MARGIN_ATTRIBUTES.map((k) => [k, numberOrNull(margins.outerXml, k)]))
+      : null,
+    centerHorizontally: printOptions ? boolOrNull(printOptions.outerXml, 'horizontalCentered') : null,
+    centerVertically: printOptions ? boolOrNull(printOptions.outerXml, 'verticalCentered') : null,
+    rowBreaks: extractElements(sheetXml, 'rowBreaks').length > 0
+      ? extractElements(extractElements(sheetXml, 'rowBreaks')[0].outerXml, 'brk')
+        .map((b) => Number(attr(b.outerXml, 'id')))
+        .filter((n) => Number.isFinite(n))
+      : [],
+    colBreaks: extractElements(sheetXml, 'colBreaks').length > 0
+      ? extractElements(extractElements(sheetXml, 'colBreaks')[0].outerXml, 'brk')
+        .map((b) => Number(attr(b.outerXml, 'id')))
+        .filter((n) => Number.isFinite(n))
+      : []
+  }
+}

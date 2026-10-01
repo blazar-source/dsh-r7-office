@@ -103,25 +103,85 @@ Design rules worth keeping:
 
 ## Publishing a release
 
-The repository is prepared for GitHub. Release checklist:
+**Nothing is published automatically.** The release stays a local candidate
+until the maintainer gives the explicit go-ahead; every step below is manual.
 
-1. `npm test` and `npm run test:clean-install` both green.
-2. Update `CHANGELOG.md` and add `docs/release-notes/v<version>.md`.
-3. Bump `version` in `package.json`.
-4. Commit, then tag: `git tag -a v0.1.0 -m "v0.1.0"`.
-5. Push the branch and the tag: `git push origin main --tags`.
-6. Create the GitHub release from the tag, pasting
-   `docs/release-notes/v0.1.0.md` as the body.
-7. Set the repository topics:
+### Preconditions
 
-   ```text
-   dsh-plugin, deepseek-harness, mcp, mcp-server, r7-office, office,
-   docx, xlsx, pptx, pdf, ooxml, document-automation
+`npm test` and `npm run test:clean-install` both green, and the acceptance
+artefacts for every format visually approved by the maintainer
+(`R7_MCP_DOCX_Acceptance`, `R7_MCP_XLSX_Acceptance`, `R7_MCP_PPTX_Acceptance`
+plus their PDFs).
+
+### Publication procedure (run only on the go-ahead)
+
+Target repository: **`blazar-source/dsh-r7-office`**, public.
+
+1. Replace every `OWNER` placeholder with `blazar-source` in the badge and
+   release-link URLs:
+   - `README.md`
+   - `README.ru.md`
+   - `CHANGELOG.md`
+   - `docs/release-notes/v0.1.0.md`
+
+   Verify none remain:
+
+   ```bash
+   grep -rn "OWNER" --include="*.md" .
    ```
 
-8. Replace the `OWNER` placeholder in the badge URLs
-   (`README.md`, `README.ru.md`, `CHANGELOG.md`) with the real organisation or
-   user name.
+2. Confirm the working tree is clean and the tag points at the release commit:
 
-Nothing is published automatically: the release is a local candidate until a
-human pushes it.
+   ```bash
+   git status --porcelain          # must print nothing
+   git log --oneline -1
+   git tag -l 'v0.1.0'
+   ```
+
+3. Create the public repository and push the branch and the tag:
+
+   ```bash
+   git remote add origin https://github.com/blazar-source/dsh-r7-office.git
+   git push -u origin main
+   git push origin v0.1.0
+   ```
+
+4. Set the repository topics exactly:
+
+   ```text
+   dsh-plugin, deepseek-harness, mcp, r7-office, docx, xlsx, pptx, office
+   ```
+
+   ```bash
+   gh repo edit blazar-source/dsh-r7-office --add-topic dsh-plugin \
+     --add-topic deepseek-harness --add-topic mcp --add-topic r7-office \
+     --add-topic docx --add-topic xlsx --add-topic pptx --add-topic office
+   ```
+
+5. Create the GitHub Release `v0.1.0` from the tag, using
+   `docs/release-notes/v0.1.0.md` as the body:
+
+   ```bash
+   gh release create v0.1.0 --title "v0.1.0" --notes-file docs/release-notes/v0.1.0.md
+   ```
+
+6. Post-publication verification:
+   - `gh run list` — the CI workflow must pass on `main` for both Node
+     versions and all three operating systems.
+   - Clean clone from the **public** URL and run the suite there, which is the
+     only check that proves the published artefact is complete:
+
+     ```bash
+     git clone https://github.com/blazar-source/dsh-r7-office.git /tmp/r7-published
+     cd /tmp/r7-published && npm install && npm test
+     ```
+
+   - Confirm the repository page renders the README, the disclaimer, the
+     SECURITY policy and the release notes.
+
+### Notes
+
+- R7-Office is proprietary: the repository must never contain its binaries.
+  `npm pack` is checked for this by `scripts/clean-install-check.mjs`.
+- The project is an unofficial community effort and must keep saying so in both
+  READMEs and in the release notes.
